@@ -1,0 +1,37 @@
+name: mi_app
+description: Una aplicación Flutter para gestión de clientes y préstamos.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Localización e idioma
+  flutter_localizations:
+    sdk: flutter
+
+  # SQLite base + FFI para desktop
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.0
+  sqlite3_flutter_libs: ^0.5.0   # 👈 añade las librerías nativas de sqlite para Windows/macOS/Linux
+
+  # Utilidades
+  path: ^1.9.0
+  cupertino_icons: ^1.0.8
+  image_picker: ^1.1.1
+  share_plus: ^12.0.0
+  fl_chart: ^1.1.1
+  intl: ^0.20.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+
+flutter:
+  uses-material-design: true

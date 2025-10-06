@@ -1,0 +1,33 @@
+// Pega/ajusta en tu archivo principal (App / Drawer) para añadir las pantallas nuevas.
+
+import 'screens/inicio_screen.dart';
+import 'screens/pagos_screen.dart';
+import 'screens/solicitudes_screen.dart';
+import 'screens/agregar_pago_screen.dart'; // si navegas directo desde un botón
+
+// Dentro de tu Drawer:
+/*
+Drawer.Navigator(
+  initialRouteName: 'Inicio',
+  screenOptions: const DrawerOptions(), // lo que ya tengas
+  children: const [
+    // ...
+  ],
+);
+*/
+
+// Ejemplo con MaterialApp routes:
+/*
+routes: {
+  '/inicio': (_) => const InicioScreen(),
+  '/pagos': (_) => const PagosScreen(),
+  '/solicitudes': (_) => const SolicitudesScreen(),
+  '/agregar-pago': (_) => const AgregarPagoScreen(),
+},
+*/
+
+// Para abrir "Agregar Pago":
+/*
+Navigator.pushNamed(context, '/agregar-pago');
+*/
+
