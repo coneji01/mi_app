@@ -1,17 +1,12 @@
-import 'dart:io' show Platform;
+// lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'data/db.dart'; // importa AppDatabase
 
-import 'screens/login_screen.dart';
-
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Desktop: usa FFI
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-  }
+  // Prepara la base de datos en cualquier plataforma
+  await AppDatabase.instance.ensureInitialized();
 
   runApp(const MyApp());
 }
@@ -24,9 +19,12 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Mi App',
-      home: const LoginScreen(),
-      // Si usas rutas nombradas, decláralas aquí.
-      // routes: {'/inicio': (_) => const InicioScreen()},
+      theme: ThemeData(
+        colorSchemeSeed: const Color(0xFF6750A4),
+        useMaterial3: true,
+      ),
+      // Mantén aquí tus rutas/initialRoute/home actuales
+      home: const Placeholder(), // <-- reemplaza con tu pantalla inicial real
     );
   }
 }

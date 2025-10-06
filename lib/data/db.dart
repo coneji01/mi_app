@@ -1,80 +1,113 @@
 // lib/data/db.dart
-//
-// Usa SIEMPRE este barrel/fachada en las pantallas:
-//   import '../data/db.dart';
-//
-// 1) Mantiene compatibilidad (exporta lo existente).
-// 2) Ofrece una API estable (Db.i.*) que no deberías romper.
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 
-export 'db_service.dart';
-export 'db_service_ext.dart';
+// Desktop (Windows/macOS/Linux)
+import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 
-// ===== Fachada estable =====
-import 'db_service.dart';
-import 'db_service_ext.dart'; // trae las extensions a DbService
+// Web (IndexedDB)
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 
-import '../models/cliente.dart';
-import '../models/prestamo.dart';
+class AppDatabase {
+  AppDatabase._();
+  static final AppDatabase instance = AppDatabase._();
 
-/// Punto único para llamar la BD desde UI sin romper pantallas.
-/// Migra gradualmente tus llamadas a `Db.i.metodo(...)`.
-class Db {
-  Db._();
-  static final Db i = Db._();
+  static const String _dbName = 'mi_app.db';
+  static const int schemaVersion = 1;
 
-  final DbService _db = DbService();
+  Database? _db;
 
-  // ---------- CLIENTES ----------
-  Future<List<Cliente>> getClientes() => _db.getClientes();
-  Future<int> insertCliente(Cliente c) => _db.insertCliente(c);
-  Future<int> updateCliente(Cliente c) => _db.updateCliente(c);
-  Future<int> deleteCliente(int id) => _db.deleteCliente(id);
-
-  /// Normaliza cédula (solo dígitos).
-  String? normalizeCedula(String? raw) {
-    if (raw == null) return null;
-    final d = raw.replaceAll(RegExp(r'\D'), '');
-    return d.isEmpty ? null : d;
+  Future<void> ensureInitialized() async {
+    await database;
   }
 
-  // ---------- PRÉSTAMOS (vía extensions sobre DbService) ----------
-  Future<int> crearPrestamo(Prestamo p) => _db.crearPrestamo(p);
-  Future<Prestamo?> getPrestamoById(int id) => _db.getPrestamoById(id);
-  Future<List<Map<String, dynamic>>> listarPrestamosConCliente() => _db.listarPrestamosConCliente();
-  Future<List<Map<String, dynamic>>> listarPagosDePrestamo(int prestamoId) => _db.listarPagosDePrestamo(prestamoId);
+  Future<Database> get database async {
+    if (_db != null) return _db!;
 
-  Future<Prestamo> registrarPagoCuotas({
-    required int prestamoId,
-    required int cuotas,
-    required double capital,
-    required double interes,
-    required double total,
-    required DateTime fecha,
-    required DateTime vence,
-    required DateTime proximoPago,
-  }) =>
-      _db.registrarPagoCuotas(
-        prestamoId: prestamoId,
-        cuotas: cuotas,
-        capital: capital,
-        interes: interes,
-        total: total,
-        fecha: fecha,
-        vence: vence,
-        proximoPago: proximoPago,
-      );
+    // Selección del factory por plataforma
+    if (kIsWeb) {
+      databaseFactory = databaseFactoryFfiWeb;            // ✅ Web
+    } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      ffi.sqfliteFfiInit();
+      databaseFactory = ffi.databaseFactoryFfi;           // ✅ Desktop
+    } else {
+      // Android/iOS: usa el factory por defecto de sqflite (no hacer nada)
+    }
 
-  Future<void> agregarPagoRapido({
-    required int prestamoId,
-    required double monto,
-    required String tipo,
-    String? nota,
-  }) =>
-      _db.agregarPagoRapido(
-        prestamoId: prestamoId,
-        monto: monto,
-        tipo: tipo,
-        nota: nota,
+    final basePath = await databaseFactory.getDatabasesPath();
+    final fullPath = kIsWeb ? _dbName : p.join(basePath, _dbName);
+
+    _db = await databaseFactory.openDatabase(
+      fullPath,
+      options: OpenDatabaseOptions(
+        version: schemaVersion,
+        onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON;'),
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      ),
+    );
+
+    return _db!;
+  }
+
+  // ================= Esquema v1 =================
+  Future<void> _onCreate(Database db, int version) async {
+    // CLIENTES
+    await db.execute('''
+      CREATE TABLE clientes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre    TEXT NOT NULL,
+        apellido  TEXT,
+        telefono  TEXT,
+        direccion TEXT
       );
+    ''');
+
+    // PRESTAMOS (incluye campos usados por tus pantallas)
+    await db.execute('''
+      CREATE TABLE prestamos(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER NOT NULL,
+        monto      REAL    NOT NULL,
+        interes    REAL    NOT NULL,
+        cuotas     INTEGER NOT NULL,
+        saldo      REAL    NOT NULL,
+        estado     TEXT    NOT NULL DEFAULT 'activo',
+        creado_en  TEXT,
+        balance_pendiente REAL,
+        total_a_pagar     REAL,
+        cuotas_totales    INTEGER,
+        cuotas_pagadas    INTEGER,
+        tipo_amortizacion TEXT,
+        fecha_inicio      TEXT,
+        proximo_pago      TEXT,
+        tags              TEXT,
+        FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
+      );
+    ''');
+
+    // PAGOS
+    await db.execute('''
+      CREATE TABLE pagos(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        prestamo_id    INTEGER NOT NULL,
+        monto_capital  REAL    NOT NULL,
+        monto_interes  REAL    NOT NULL,
+        fecha          TEXT    NOT NULL,
+        nota           TEXT,
+        FOREIGN KEY (prestamo_id) REFERENCES prestamos(id) ON DELETE CASCADE
+      );
+    ''');
+
+    // Índices útiles
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_prestamos_cliente ON prestamos(cliente_id);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_pagos_prestamo   ON pagos(prestamo_id);');
+  }
+
+  // ================= Migraciones futuras =================
+  Future<void> _onUpgrade(Database db, int oldV, int newV) async {
+    // if (oldV < 2) { ... }
+  }
 }
-

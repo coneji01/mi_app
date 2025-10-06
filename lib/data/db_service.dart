@@ -1,320 +1,303 @@
-import 'package:path/path.dart' as p;
+// lib/data/db_service.dart
 import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
 
-import '../models/cliente.dart'; // usa tu enum Sexo y SexoCodec
+import '../models/cliente.dart';
+import '../models/prestamo.dart';
 
 class DbService {
-  // --------- Singleton ---------
-  static final DbService _instance = DbService._();
-  factory DbService() => _instance;
+  // ────────────────── Singleton ──────────────────
   DbService._();
+  static final DbService instance = DbService._();
 
-  Database? _db;
+  static Database? _database;
 
-  Future<Database> get database async {
-    if (_db != null) return _db!;
-    final dbPath = await getDatabasesPath();
-    _db = await openDatabase(
-      p.join(dbPath, 'mi_app.db'),
+  /// Getter interno usado por los métodos del servicio.
+  Future<Database> get _db async {
+    if (_database != null) return _database!;
+    _database = await _initDb();
+    return _database!;
+  }
+
+  /// Getter público para otros servicios (p.ej. PagosService)
+  Future<Database> get database async => await _db;
+
+  // ────────────────── Inicialización ──────────────────
+  Future<Database> _initDb() async {
+    final path = join(await getDatabasesPath(), 'mi_app.db');
+    return openDatabase(
+      path,
       version: 1,
-      onCreate: (db, v) async {
-        // Esquema “completo” para instalaciones nuevas
-        await _createClientes(db);
-        await _createPrestamosPagos(db); // <-- NUEVO
-      },
-      onOpen: (db) async {
-        // Asegura claves foráneas
+      onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
+      },
+      onCreate: (db, version) async {
+        // ⚠️ Ajusta columnas si tu esquema real difiere.
+        await db.execute('''
+          CREATE TABLE clientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            apellido TEXT NOT NULL,
+            telefono TEXT,
+            direccion TEXT,
+            cedula TEXT,
+            sexo INTEGER,
+            creadoEn TEXT NOT NULL,   -- ISO-8601
+            fotoPath TEXT
+          );
+        ''');
 
-        // Migraciones y normalizaciones NO destructivas
-        await _ensureClientes(db);
-        await _ensurePrestamosPagos(db); // <-- NUEVO
+        await db.execute('''
+          CREATE TABLE prestamos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clienteId INTEGER NOT NULL,
+            monto REAL NOT NULL,
+            balancePendiente REAL NOT NULL,
+            totalAPagar REAL NOT NULL,
+            cuotasTotales INTEGER NOT NULL,
+            cuotasPagadas INTEGER NOT NULL,
+            interes REAL NOT NULL,          -- 0..1 por periodo
+            modalidad TEXT NOT NULL,
+            tipoAmortizacion TEXT NOT NULL,
+            fechaInicio TEXT NOT NULL,      -- ISO-8601
+            proximoPago TEXT,               -- ISO-8601
+            FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
+          );
+        ''');
+
+        await db.execute('''
+          CREATE TABLE pagos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prestamoId INTEGER NOT NULL,
+            monto REAL NOT NULL,
+            fecha TEXT NOT NULL,            -- ISO-8601
+            nota TEXT,
+            FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
+          );
+        ''');
       },
     );
-    return _db!;
   }
 
-  // =========================================================
-  // ===============   CLIENTES: ESQUEMA BASE   ==============
-  // =========================================================
+  // ────────────────── Utilidades ──────────────────
 
-  Future<void> _createClientes(Database db) async {
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS clientes (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre      TEXT NOT NULL,
-        apellido    TEXT NOT NULL,
-        cedula      TEXT,
-        sexo        TEXT,
-        direccion   TEXT NOT NULL,
-        telefono    TEXT,
-        creado_en   TEXT NOT NULL,
-        foto_path   TEXT
-      );
-    ''');
-
-    // Índice único parcial para cédula (ignora NULL y vacíos)
-    await db.execute('''
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_clientes_cedula
-      ON clientes(cedula)
-      WHERE cedula IS NOT NULL AND TRIM(cedula) <> '';
-    ''');
-  }
-
-  // =========================================================
-  // ========   PRÉSTAMOS / PAGOS: ESQUEMA BASE   ============
-  // =========================================================
-
-  Future<void> _createPrestamosPagos(Database db) async {
-    // Tabla de préstamos
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS prestamos (
-        id                INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id        INTEGER NOT NULL,
-        monto             REAL    NOT NULL,
-        interes           REAL    NOT NULL,        -- % por período
-        tipo_amortizacion TEXT    NOT NULL,        -- 'Interés Fijo', 'Francés', etc.
-        modalidad         TEXT    NOT NULL,        -- 'Diario', 'Mensual', ...
-        cuotas_totales    INTEGER NOT NULL,
-        cuotas_pagadas    INTEGER NOT NULL DEFAULT 0,
-        balance_pendiente REAL    NOT NULL,
-        proximo_pago      TEXT,                    -- ISO
-        anulado           INTEGER NOT NULL DEFAULT 0, -- 0/1
-        creado_en         TEXT    NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
-      );
-    ''');
-
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_prestamos_cliente ON prestamos(cliente_id);');
-
-    // Tabla de pagos
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS pagos (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        prestamo_id  INTEGER NOT NULL,
-        fecha        TEXT    NOT NULL,   -- ISO
-        vence        TEXT,               -- ISO
-        capital      REAL,               -- por cuota(s)
-        interes      REAL,               -- por cuota(s)
-        monto        REAL    NOT NULL,   -- total cobrado (capital+interés o pago libre)
-        tipo         TEXT,               -- 'cuota', 'mora', 'ajuste', etc.
-        nota         TEXT,
-        creado_en    TEXT    NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (prestamo_id) REFERENCES prestamos(id) ON DELETE CASCADE
-      );
-    ''');
-
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_pagos_prestamo ON pagos(prestamo_id);');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_pagos_fecha ON pagos(fecha);');
-  }
-
-  // =========================================================
-  // =========   CLIENTES: MIGRACIONES + NORMALIZAR   ========
-  // =========================================================
-
-  Future<bool> _tableHasColumn(Database db, String table, String column) async {
-    final cols = await db.rawQuery("PRAGMA table_info('$table');");
-    return cols.any((c) => (c['name'] as String).toLowerCase() == column.toLowerCase());
-  }
-
-  Future<void> _ensureColumn(Database db, String table, String column, String typeSql) async {
-    if (!await _tableHasColumn(db, table, column)) {
-      await db.execute("ALTER TABLE $table ADD COLUMN $column $typeSql;");
-    }
-  }
-
-  /// Asegura columnas requeridas por tu modelo y normaliza datos antiguos.
-  Future<void> _ensureClientes(Database db) async {
-    // Crea la tabla si no existiera (con un mínimo para que no falle)
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS clientes (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre      TEXT NOT NULL,
-        apellido    TEXT NOT NULL,
-        cedula      TEXT,
-        sexo        TEXT,
-        direccion   TEXT,
-        telefono    TEXT
-      );
-    ''');
-
-    // Agrega columnas que falten en bases antiguas
-    await _ensureColumn(db, 'clientes', 'direccion', 'TEXT');
-    await _ensureColumn(db, 'clientes', 'creado_en', 'TEXT');
-    await _ensureColumn(db, 'clientes', 'foto_path', 'TEXT');
-
-    // Normalizaciones para cumplir Modelo (direccion/creado_en NO nulos)
-    final nowIso = DateTime.now().toIso8601String();
-
-    await db.execute("""
-      UPDATE clientes SET direccion = '' WHERE direccion IS NULL;
-    """);
-
-    await db.rawUpdate(
-      "UPDATE clientes SET creado_en = ? WHERE creado_en IS NULL OR TRIM(COALESCE(creado_en,'')) = ''",
-      [nowIso],
-    );
-
-    // Normaliza sexo a M/F/O (tu SexoCodec lo usa así)
-    await db.execute("""
-      UPDATE clientes SET sexo = 'M' WHERE sexo IN ('Masculino','masculino','male');
-    """);
-    await db.execute("""
-      UPDATE clientes SET sexo = 'F' WHERE sexo IN ('Femenino','femenino','female');
-    """);
-    await db.execute("""
-      UPDATE clientes SET sexo = 'O' WHERE sexo IN ('Otro','otro','other');
-    """);
-
-    // Índice único parcial para cédula (ignora NULL y vacíos)
-    await db.execute('''
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_clientes_cedula
-      ON clientes(cedula)
-      WHERE cedula IS NOT NULL AND TRIM(cedula) <> '';
-    ''');
-  }
-
-  // =========================================================
-  // =======   PRÉSTAMOS/PAGOS: MIGRACIONES ENSURE   =========
-  // =========================================================
-
-  Future<void> _ensurePrestamosPagos(Database db) async {
-    // Crea tablas si no existen (idempotente)
-    await _createPrestamosPagos(db);
-
-    // Asegura columnas faltantes de préstamos
-    await _ensureColumn(db, 'prestamos', 'interes', 'REAL');
-    await _ensureColumn(db, 'prestamos', 'tipo_amortizacion', 'TEXT');
-    await _ensureColumn(db, 'prestamos', 'modalidad', 'TEXT');
-    await _ensureColumn(db, 'prestamos', 'cuotas_totales', 'INTEGER');
-    await _ensureColumn(db, 'prestamos', 'cuotas_pagadas', 'INTEGER NOT NULL DEFAULT 0');
-    await _ensureColumn(db, 'prestamos', 'balance_pendiente', 'REAL');
-    await _ensureColumn(db, 'prestamos', 'proximo_pago', 'TEXT');
-    await _ensureColumn(db, 'prestamos', 'anulado', 'INTEGER NOT NULL DEFAULT 0');
-    await _ensureColumn(db, 'prestamos', 'creado_en', "TEXT NOT NULL DEFAULT (datetime('now'))");
-
-    // Defaults razonables si quedaron valores nulos
-    await db.execute("""
-      UPDATE prestamos
-      SET cuotas_pagadas = COALESCE(cuotas_pagadas, 0)
-    """);
-
-    await db.execute("""
-      UPDATE prestamos
-      SET balance_pendiente = COALESCE(balance_pendiente, monto)
-      WHERE balance_pendiente IS NULL AND monto IS NOT NULL;
-    """);
-
-    // Asegura columnas faltantes de pagos
-    await _ensureColumn(db, 'pagos', 'vence', 'TEXT');
-    await _ensureColumn(db, 'pagos', 'capital', 'REAL');
-    await _ensureColumn(db, 'pagos', 'interes', 'REAL');
-    await _ensureColumn(db, 'pagos', 'tipo', 'TEXT');
-    await _ensureColumn(db, 'pagos', 'nota', 'TEXT');
-    await _ensureColumn(db, 'pagos', 'creado_en', "TEXT NOT NULL DEFAULT (datetime('now'))");
-
-    // Índices por si faltan
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_prestamos_cliente ON prestamos(cliente_id);');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_pagos_prestamo ON pagos(prestamo_id);');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_pagos_fecha ON pagos(fecha);');
-  }
-
-  // =========================================================
-  // =====================   UTILIDADES   ====================
-  // =========================================================
-
-  /// Normaliza la cédula: quita guiones, espacios y deja solo dígitos.
+  /// Normaliza cédula: deja solo dígitos; null si queda vacía.
   static String? normalizeCedula(String? raw) {
     if (raw == null) return null;
-    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    return digits.isEmpty ? null : digits;
+    final d = raw.replaceAll(RegExp(r'\D'), '');
+    return d.isEmpty ? null : d;
   }
 
-  // =========================================================
-  // ====================   CRUD CLIENTES   ==================
-  // =========================================================
+  /// Borra contenido de las tablas (útil en pruebas).
+  Future<void> nuke() async {
+    final db = await _db;
+    await db.delete('pagos');
+    await db.delete('prestamos');
+    await db.delete('clientes');
+  }
+
+  // ────────────────── CLIENTES ──────────────────
 
   Future<int> insertCliente(Cliente c) async {
-    final db = await database;
-
-    final cedulaNorm = normalizeCedula(c.cedula);
-
+    final db = await _db;
     final data = <String, Object?>{
-      'nombre': c.nombre.trim(),
-      'apellido': c.apellido.trim(),
-      'cedula': cedulaNorm,
-      'sexo': SexoCodec.toDb(c.sexo),   // guarda 'M'/'F'/'O'
-      'direccion': c.direccion.trim(),  // requerido por tu modelo
-      'telefono': c.telefono?.trim(),
-      'creado_en': c.creadoEn,          // requerido por tu modelo
-      'foto_path': c.fotoPath,
+      'nombre'   : c.nombre,
+      'apellido' : c.apellido,
+      'telefono' : c.telefono,
+      'direccion': c.direccion,
+      'cedula'   : c.cedula,
+      'sexo'     : c.sexo?.index,   // enum -> int
+      'creadoEn' : c.creadoEn,
+      'fotoPath' : c.fotoPath,
     };
-
     return db.insert('clientes', data, conflictAlgorithm: ConflictAlgorithm.abort);
   }
 
   Future<int> updateCliente(Cliente c) async {
-    final db = await database;
-    if (c.id == null) throw Exception('Cliente sin id');
-
-    final cedulaNorm = normalizeCedula(c.cedula);
-
+    final db = await _db;
+    if (c.id == null) {
+      throw ArgumentError('Cliente.id es requerido para actualizar');
+    }
     final data = <String, Object?>{
-      'nombre': c.nombre.trim(),
-      'apellido': c.apellido.trim(),
-      'cedula': cedulaNorm,
-      'sexo': SexoCodec.toDb(c.sexo),
-      'direccion': c.direccion.trim(),
-      'telefono': c.telefono?.trim(),
-      'creado_en': c.creadoEn,
-      'foto_path': c.fotoPath,
+      'nombre'   : c.nombre,
+      'apellido' : c.apellido,
+      'telefono' : c.telefono,
+      'direccion': c.direccion,
+      'cedula'   : c.cedula,
+      'sexo'     : c.sexo?.index,
+      'creadoEn' : c.creadoEn,
+      'fotoPath' : c.fotoPath,
     };
-
-    return db.update('clientes', data, where: 'id = ?', whereArgs: [c.id]);
-  }
-
-  Future<int> deleteCliente(int id) async {
-    final db = await database;
-    return db.delete('clientes', where: 'id = ?', whereArgs: [id]);
-  }
-
-  Cliente _clienteFromMap(Map<String, dynamic> m) {
-    // Con _ensureClientes ya garantizamos no-nulos para direccion/creado_en,
-    // pero de todos modos ponemos fallback para máxima tolerancia.
-    return Cliente(
-      id: m['id'] as int?,
-      nombre: (m['nombre'] as String?) ?? '',
-      apellido: (m['apellido'] as String?) ?? '',
-      cedula: m['cedula'] as String?,
-      sexo: SexoCodec.fromDb(m['sexo'] as String?),
-      direccion: (m['direccion'] as String?) ?? '',
-      telefono: m['telefono'] as String?,
-      creadoEn: (m['creado_en'] as String?) ?? '',
-      fotoPath: m['foto_path'] as String?,
+    return db.update(
+      'clientes',
+      data,
+      where: 'id = ?',
+      whereArgs: [c.id],
+      conflictAlgorithm: ConflictAlgorithm.abort,
     );
   }
 
-  /// Listado genérico (aliás de listarClientes)
-  Future<List<Cliente>> getClientes() async {
-    final db = await database;
-    final rows = await db.query('clientes', orderBy: 'creado_en DESC');
-    return rows.map(_clienteFromMap).toList();
+  /// Lista clientes (con filtro opcional por nombre/apellido/teléfono).
+  Future<List<Cliente>> getClientes({
+    String? filtro,
+    int? limit,
+    int? offset,
+  }) async {
+    final db = await _db;
+    String where = '';
+    List<Object?> args = [];
+
+    if (filtro != null && filtro.trim().isNotEmpty) {
+      final q = '%${filtro.trim()}%';
+      where = 'WHERE nombre LIKE ? OR apellido LIKE ? OR telefono LIKE ?';
+      args = [q, q, q];
+    }
+
+    final lim = (limit != null) ? ' LIMIT $limit' : '';
+    final off = (offset != null && offset > 0) ? ' OFFSET $offset' : '';
+
+    final rows = await db.rawQuery('''
+      SELECT id, nombre, apellido, telefono, direccion, cedula, sexo, creadoEn, fotoPath
+      FROM clientes
+      $where
+      ORDER BY nombre COLLATE NOCASE ASC, apellido COLLATE NOCASE ASC
+      $lim$off
+    ''', args);
+
+    return rows.map((m) => Cliente.fromMap(m)).toList();
   }
 
-  Future<List<Cliente>> listarClientes() async {
-    final db = await database;
-    final rows = await db.query('clientes', orderBy: 'id DESC');
-    return rows.map(_clienteFromMap).toList();
-  }
-
+  /// Obtiene un cliente por ID.
   Future<Cliente?> getClienteById(int id) async {
-    final db = await database;
-    final rows = await db.query('clientes', where: 'id = ?', whereArgs: [id], limit: 1);
+    final db = await _db;
+    final rows = await db.query(
+      'clientes',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
     if (rows.isEmpty) return null;
-    return _clienteFromMap(rows.first);
+    return Cliente.fromMap(rows.first);
   }
 
-  // =========================================================
-  // ====== El resto (préstamos/pagos) en db_service_ext.dart =
-  // =========================================================
+  // ────────────────── PRÉSTAMOS ──────────────────
+
+  /// Inserta un préstamo y devuelve el id.
+  Future<int> crearPrestamo(Prestamo p) async {
+    final db = await _db;
+    final data = <String, Object?>{
+      'clienteId'       : p.clienteId,
+      'monto'           : p.monto,
+      'balancePendiente': p.balancePendiente,
+      'totalAPagar'     : p.totalAPagar,
+      'cuotasTotales'   : p.cuotasTotales,
+      'cuotasPagadas'   : p.cuotasPagadas,
+      'interes'         : p.interes,
+      'modalidad'       : p.modalidad,
+      'tipoAmortizacion': p.tipoAmortizacion,
+      'fechaInicio'     : p.fechaInicio,
+      'proximoPago'     : p.proximoPago,
+    };
+    return db.insert('prestamos', data, conflictAlgorithm: ConflictAlgorithm.abort);
+  }
+
+  Future<Prestamo?> getPrestamoById(int id) async {
+    final db = await _db;
+    final rows = await db.query(
+      'prestamos',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Prestamo.fromMap(rows.first);
+  }
+
+  /// Préstamos + datos del cliente (para listados).
+  Future<List<Map<String, dynamic>>> listarPrestamosConCliente() async {
+    final db = await _db;
+    const sql = '''
+      SELECT
+        p.id                            AS prestamoId,
+        p.clienteId                     AS clienteId,
+        c.nombre                        AS clienteNombre,
+        c.apellido                      AS clienteApellido,
+        (c.nombre || ' ' || c.apellido) AS clienteNombreCompleto,
+        p.monto,
+        p.balancePendiente,
+        p.totalAPagar,
+        p.cuotasTotales,
+        p.cuotasPagadas,
+        p.interes,
+        p.modalidad,
+        p.tipoAmortizacion,
+        p.fechaInicio,
+        p.proximoPago
+      FROM prestamos p
+      LEFT JOIN clientes c ON c.id = p.clienteId
+      ORDER BY p.id DESC
+    ''';
+    return db.rawQuery(sql);
+  }
+
+  // ────────────────── PAGOS ──────────────────
+
+  /// Inserta un pago y, si `tipo == 'capital'`, reduce el balancePendiente.
+  /// NOTA: el `tipo` se guarda como etiqueta dentro de `nota` -> "[tipo] ...".
+  Future<void> agregarPagoRapido({
+    required int prestamoId,
+    required double monto,
+    String? nota,
+    String? tipo, // 'capital','interes','mora','seguro','gastos','otros'
+  }) async {
+    final db = await _db;
+    final ahoraIso = DateTime.now().toIso8601String();
+
+    final notaFinal = (tipo == null || tipo.isEmpty)
+        ? nota
+        : (nota == null || nota.isEmpty ? '[$tipo]' : '[$tipo] $nota');
+
+    await db.transaction((txn) async {
+      // 1) Insertar pago
+      await txn.insert('pagos', {
+        'prestamoId': prestamoId,
+        'monto': monto,
+        'fecha': ahoraIso,
+        'nota': notaFinal,
+      });
+
+      // 2) Si es capital, actualizar balance del préstamo
+      if ((tipo ?? '').toLowerCase() == 'capital') {
+        final rows = await txn.query(
+          'prestamos',
+          columns: ['balancePendiente'],
+          where: 'id = ?',
+          whereArgs: [prestamoId],
+          limit: 1,
+        );
+        if (rows.isNotEmpty) {
+          final bal = (rows.first['balancePendiente'] as num?)?.toDouble() ?? 0.0;
+          final nuevo = bal - monto;
+          final nuevoClamp = nuevo < 0 ? 0.0 : nuevo;
+          await txn.update(
+            'prestamos',
+            {'balancePendiente': nuevoClamp},
+            where: 'id = ?',
+            whereArgs: [prestamoId],
+          );
+        }
+      }
+    });
+  }
+
+  /// Lista pagos de un préstamo (más recientes primero).
+  Future<List<Map<String, dynamic>>> listarPagosDePrestamo(int prestamoId) async {
+    final db = await _db;
+    return db.query(
+      'pagos',
+      where: 'prestamoId = ?',
+      whereArgs: [prestamoId],
+      orderBy: 'fecha DESC, id DESC',
+    );
+  }
 }

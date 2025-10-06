@@ -1,7 +1,7 @@
 // lib/screens/agregar_pago_screen.dart
 import 'package:flutter/material.dart';
 import '../widgets/app_drawer.dart';
-import '../data/db.dart';
+import '../data/db_service.dart';           // ✅ servicio correcto (singleton)
 
 class AgregarPagoScreen extends StatefulWidget {
   final int prestamoId;
@@ -37,14 +37,17 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
+
     try {
       final monto = double.parse(_montoCtrl.text.replaceAll(',', '.'));
-      await DbService().agregarPagoRapido(
+
+      await DbService.instance.agregarPagoRapido(
         prestamoId: widget.prestamoId,
         monto: monto,
-        nota: _notaCtrl.text,
+        nota: _notaCtrl.text.trim().isEmpty ? null : _notaCtrl.text.trim(),
         tipo: _tipo,
       );
+
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -60,9 +63,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Asegúrate de que AppDrawer tenga constructor const
-      // (en app_drawer.dart: `const AppDrawer({super.key, this.current});`)
-      drawer: const AppDrawer(current: null),
+      drawer: const AppDrawer(),
       appBar: AppBar(title: const Text('Agregar pago')),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -85,17 +86,15 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                // ✅ evita el warning: usa initialValue en lugar de value
-                initialValue: _tipo,
+                initialValue: _tipo, // ✅ evita warnings
                 items: _tipos
                     .map((t) => DropdownMenuItem(
                           value: t,
-                          child: Text(t[0].toUpperCase() + t.substring(1)),
+                          child: Text('${t[0].toUpperCase()}${t.substring(1)}'),
                         ))
                     .toList(),
                 onChanged: (v) => setState(() => _tipo = v ?? 'capital'),
-                decoration:
-                    const InputDecoration(labelText: 'Tipo de pago'),
+                decoration: const InputDecoration(labelText: 'Tipo de pago'),
               ),
               const SizedBox(height: 12),
               TextFormField(

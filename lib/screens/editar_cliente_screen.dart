@@ -1,7 +1,7 @@
 // lib/screens/editar_cliente_screen.dart
 import 'package:flutter/material.dart';
 
-import '../data/db.dart';
+import '../data/db_service.dart';   // ✅ servicio correcto (singleton)
 import '../models/cliente.dart';
 
 class EditarClienteScreen extends StatefulWidget {
@@ -29,12 +29,12 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
   void initState() {
     super.initState();
     final c = widget.cliente;
-    _nombreCtrl = TextEditingController(text: c.nombre);
-    _apellidoCtrl = TextEditingController(text: c.apellido);
-    _cedulaCtrl = TextEditingController(text: c.cedula ?? '');
+    _nombreCtrl    = TextEditingController(text: c.nombre);
+    _apellidoCtrl  = TextEditingController(text: c.apellido);
+    _cedulaCtrl    = TextEditingController(text: c.cedula ?? '');
     _direccionCtrl = TextEditingController(text: c.direccion);
-    _telefonoCtrl = TextEditingController(text: c.telefono ?? '');
-    _sexo = c.sexo;
+    _telefonoCtrl  = TextEditingController(text: c.telefono ?? '');
+    _sexo          = c.sexo;
   }
 
   @override
@@ -69,13 +69,13 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
         cedula: cedulaNorm,
         sexo: _sexo,
         direccion: _direccionCtrl.text.trim(),
-        telefono:
-            _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
+        telefono: _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
         creadoEn: widget.cliente.creadoEn,
         fotoPath: widget.cliente.fotoPath,
       );
 
-      await DbService().updateCliente(updated);
+      // ✅ usar singleton
+      await DbService.instance.updateCliente(updated);
 
       if (!mounted) return;
       Navigator.pop(context, updated);
@@ -102,16 +102,14 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
               controller: _nombreCtrl,
               decoration: _dec('Nombre', icon: Icons.person_outline),
               textInputAction: TextInputAction.next,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _apellidoCtrl,
               decoration: _dec('Apellido', icon: Icons.person),
               textInputAction: TextInputAction.next,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
             ),
             const SizedBox(height: 12),
             TextFormField(
@@ -129,7 +127,6 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
             ),
             const SizedBox(height: 12),
 
-            // 👇 Reemplazo: initialValue en vez de value
             DropdownButtonFormField<Sexo>(
               initialValue: _sexo,
               decoration: _dec('Sexo', icon: Icons.wc_outlined),
@@ -148,18 +145,13 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
               textInputAction: TextInputAction.done,
               minLines: 1,
               maxLines: 2,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: _saving ? null : _guardar,
               icon: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.save_outlined),
               label: const Text('Guardar'),
             ),

@@ -5,7 +5,7 @@ import '../widgets/app_drawer.dart';
 import '../models/cliente.dart';
 import '../models/prestamo_propuesta.dart';
 import '../models/prestamo.dart';
-import '../data/db.dart';
+import '../data/db_service.dart';
 
 class NuevoPrestamoScreen extends StatelessWidget {
   final Cliente cliente;
@@ -17,7 +17,7 @@ class NuevoPrestamoScreen extends StatelessWidget {
     required this.propuesta,
   });
 
-  // Calcula el próximo pago según la modalidad
+  // ─────────── Cálculo de próxima fecha ───────────
   DateTime _calcProximoPago(DateTime base, String modalidad) {
     final m = modalidad.toLowerCase();
     if (m.contains('diario')) return base.add(const Duration(days: 1));
@@ -27,38 +27,33 @@ class NuevoPrestamoScreen extends StatelessWidget {
     if (m.contains('quinc')) return base.add(const Duration(days: 15));
     if (m.contains('mens')) return DateTime(base.year, base.month + 1, base.day);
     if (m.contains('anual')) return DateTime(base.year + 1, base.month, base.day);
-    // default: 30 días
     return base.add(const Duration(days: 30));
   }
 
   String _money(num v) => 'RD\$ ${v.toStringAsFixed(2)}';
 
+  // ─────────── Guardar préstamo ───────────
   Future<void> _guardar(BuildContext context) async {
     final now = DateTime.now();
 
-    // Capital a saldar inicia igual al monto (el interés no reduce capital).
     final balanceInicial = propuesta.monto;
-
-    // totalAPagar requerido por el modelo/BD.
-    final double totalAPagar = propuesta.cuota * propuesta.cuotas;
-
-    final proximoPago =
-        _calcProximoPago(now, propuesta.modalidad).toIso8601String();
+    final totalAPagar = propuesta.cuota * propuesta.cuotas;
+    final proximoPago = _calcProximoPago(now, propuesta.modalidad).toIso8601String();
 
     try {
-      await DbService().crearPrestamo(
+      await DbService.instance.crearPrestamo(
         Prestamo(
           clienteId: cliente.id!,
           monto: propuesta.monto,
           balancePendiente: balanceInicial,
-          totalAPagar: totalAPagar,              // ✅ requerido
+          totalAPagar: totalAPagar,
           cuotasTotales: propuesta.cuotas,
           cuotasPagadas: 0,
-          interes: propuesta.tasaPorPeriodo / 100, // tasa por periodo en %
+          interes: propuesta.tasaPorPeriodo / 100,
           modalidad: propuesta.modalidad,
           tipoAmortizacion: propuesta.tipoAmortizacion,
           fechaInicio: now.toIso8601String(),
-          proximoPago: proximoPago,                // String (ISO)
+          proximoPago: proximoPago,
         ),
       );
 
@@ -94,28 +89,22 @@ class NuevoPrestamoScreen extends StatelessWidget {
                 children: [
                   Text(
                     '${cliente.nombre} ${cliente.apellido}',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Expanded(
-                          child: Text('Modalidad: ${propuesta.modalidad}')),
-                      Expanded(
-                          child: Text(
-                              'Amortización: ${propuesta.tipoAmortizacion}')),
+                      Expanded(child: Text('Modalidad: ${propuesta.modalidad}')),
+                      Expanded(child: Text('Amortización: ${propuesta.tipoAmortizacion}')),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Row(
                     children: [
                       Expanded(child: Text('Cuotas: ${propuesta.cuotas}')),
-                      Expanded(
-                          child: Text(
-                              'Tasa/Periodo: ${propuesta.tasaPorPeriodo.toStringAsFixed(2)}%')),
+                      Expanded(child: Text('Tasa/Periodo: ${propuesta.tasaPorPeriodo.toStringAsFixed(2)}%')),
                     ],
                   ),
                 ],
@@ -154,6 +143,7 @@ class _KV extends StatelessWidget {
   const _KV(this.k, this.v);
   final String k;
   final String v;
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;

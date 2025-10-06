@@ -1,7 +1,6 @@
-// lib/screens/prestamos_screen.dart
 import 'package:flutter/material.dart';
-import '../data/db.dart';
-import '../routes/nav.dart'; // usamos la función push*
+import '../data/db_service.dart';
+import '../routes/nav.dart'; // pushPrestamoDetalle, etc.
 
 class PrestamosScreen extends StatefulWidget {
   const PrestamosScreen({super.key});
@@ -10,7 +9,8 @@ class PrestamosScreen extends StatefulWidget {
 }
 
 class _PrestamosScreenState extends State<PrestamosScreen> {
-  final _db = DbService();
+  // ✅ DbService suele estar como singleton: usamos instance
+  final _db = DbService.instance;
 
   List<Map<String, dynamic>> _items = [];
   bool _loading = true;
@@ -24,10 +24,10 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
 
   Future<void> _load() async {
     try {
-      final rows = await _db.listarPrestamosConCliente();
+      final rows = await _db.listarPrestamosConCliente(); // <-- viene de la extensión
       if (!mounted) return;
       setState(() {
-        _items = (rows as List).cast<Map<String, dynamic>>();
+        _items = rows;
         _loading = false;
         _error = null;
       });
@@ -165,23 +165,26 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
             Container(
               width: 170,
               decoration: BoxDecoration(
-                border: Border(left: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4))),
-              ),
+                border: Border(left: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4)))),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('Cuotas $cuotasPag/$cuotasTot',
+                    Text(
+                      'Cuotas $cuotasPag/$cuotasTot',
                       textAlign: TextAlign.right,
-                      style: Theme.of(context).textTheme.labelLarge),
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 10),
                     Text(
                       _money(balance),
                       textAlign: TextAlign.right,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Align(

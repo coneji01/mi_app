@@ -2,7 +2,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import '../data/db.dart';
+
+import '../data/db_service.dart';          // ✅ Servicio correcto (singleton)
 import '../models/cliente.dart';
 
 class NuevoClienteScreen extends StatefulWidget {
@@ -25,7 +26,7 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
   final _picker = ImagePicker();
   String? _fotoPath;
 
-  // Enum por defecto
+  // Valor por defecto
   Sexo _sexo = Sexo.masculino;
 
   @override
@@ -38,12 +39,21 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
     super.dispose();
   }
 
-  String? _req(String? v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null;
+  String? _req(String? v) =>
+      (v == null || v.trim().isEmpty) ? 'Requerido' : null;
 
-  String? _cedulaNormalizada(String? raw) => DbService.normalizeCedula(raw);
+  // Normaliza cédula a solo dígitos (devuelve null si queda vacía)
+  String? _cedulaNormalizada(String? raw) {
+    if (raw == null) return null;
+    final d = raw.replaceAll(RegExp(r'\D'), '');
+    return d.isEmpty ? null : d;
+  }
 
   Future<void> _pickFoto() async {
-    final x = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    final x = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
     if (x != null) setState(() => _fotoPath = x.path);
   }
 
@@ -57,19 +67,23 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
         nombre: _nombre.text.trim(),
         apellido: _apellido.text.trim(),
         direccion: _direccion.text.trim(),
-        telefono: _telefono.text.trim().isEmpty ? null : _telefono.text.trim(),
+        telefono:
+            _telefono.text.trim().isEmpty ? null : _telefono.text.trim(),
         cedula: _cedulaNormalizada(_cedula.text),
         sexo: _sexo,
         creadoEn: DateTime.now().toIso8601String(),
         fotoPath: _fotoPath,
       );
 
-      await DbService().insertCliente(cli);
+      // ✅ Usar el singleton
+      await DbService.instance.insertCliente(cli);
+
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -95,8 +109,11 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
                 onTap: _pickFoto,
                 child: CircleAvatar(
                   radius: 44,
-                  backgroundImage: _fotoPath != null ? FileImage(File(_fotoPath!)) : null,
-                  child: _fotoPath == null ? const Icon(Icons.camera_alt, size: 30) : null,
+                  backgroundImage:
+                      _fotoPath != null ? FileImage(File(_fotoPath!)) : null,
+                  child: _fotoPath == null
+                      ? const Icon(Icons.camera_alt, size: 30)
+                      : null,
                 ),
               ),
             ),
@@ -139,7 +156,6 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
             ),
             const SizedBox(height: 12),
 
-            // 👇 Aquí el cambio: initialValue en lugar de value
             DropdownButtonFormField<Sexo>(
               initialValue: _sexo,
               decoration: _dec('Sexo', icon: Icons.wc_outlined),
@@ -167,7 +183,11 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
             FilledButton.icon(
               onPressed: _saving ? null : _guardar,
               icon: _saving
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.save_outlined),
               label: const Text('Guardar'),
             ),
