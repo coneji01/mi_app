@@ -6,6 +6,7 @@ import '../models/cliente.dart';
 import '../models/prestamo_propuesta.dart';
 import '../models/prestamo.dart';
 import '../data/db_service.dart';
+import '../routes/nav.dart';
 
 class NuevoPrestamoScreen extends StatelessWidget {
   final Cliente cliente;
@@ -17,15 +18,14 @@ class NuevoPrestamoScreen extends StatelessWidget {
     required this.propuesta,
   });
 
-  // ─────────── Cálculo de próxima fecha ───────────
   DateTime _calcProximoPago(DateTime base, String modalidad) {
     final m = modalidad.toLowerCase();
     if (m.contains('diario')) return base.add(const Duration(days: 1));
-    if (m.contains('interdiario')) return base.add(const Duration(days: 2));
-    if (m.contains('biseman')) return base.add(const Duration(days: 14));
+    if (m.contains('inter')) return base.add(const Duration(days: 2));
     if (m.contains('seman')) return base.add(const Duration(days: 7));
-    if (m.contains('quinc')) return base.add(const Duration(days: 15));
-    if (m.contains('mens')) return DateTime(base.year, base.month + 1, base.day);
+    if (m.contains('bise'))  return base.add(const Duration(days: 14));
+    if (m.contains('quin'))  return base.add(const Duration(days: 15));
+    if (m.contains('mens'))  return DateTime(base.year, base.month + 1, base.day);
     if (m.contains('anual')) return DateTime(base.year + 1, base.month, base.day);
     return base.add(const Duration(days: 30));
   }
@@ -41,7 +41,7 @@ class NuevoPrestamoScreen extends StatelessWidget {
     final proximoPago = _calcProximoPago(now, propuesta.modalidad).toIso8601String();
 
     try {
-      await DbService.instance.crearPrestamo(
+      final newId = await DbService.instance.crearPrestamo(
         Prestamo(
           clienteId: cliente.id!,
           monto: propuesta.monto,
@@ -59,9 +59,18 @@ class NuevoPrestamoScreen extends StatelessWidget {
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Préstamo creado')),
+        SnackBar(content: Text('Préstamo asignado a ${cliente.nombreCompleto}')),
       );
-      Navigator.pop(context, true);
+
+      // Ir directo al detalle del préstamo recién creado
+      await pushPrestamoDetalle<void>(
+        context,
+        prestamoId: newId,
+        clienteNombre: cliente.nombreCompleto,
+      );
+
+      if (!context.mounted) return;
+      Navigator.pop(context, true); // volvemos al detalle del cliente con "cambios"
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -75,8 +84,10 @@ class NuevoPrestamoScreen extends StatelessWidget {
     final totalAPagarAproximado = propuesta.cuota * propuesta.cuotas;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Nuevo préstamo')),
-      drawer: const AppDrawer(),
+      drawer: const AppDrawer(current: AppSection.prestamos),
+      appBar: AppBar(
+        title: const Text('Confirmar préstamo'),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -87,12 +98,7 @@ class NuevoPrestamoScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${cliente.nombre} ${cliente.apellido}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
+                  Text('Cliente: ${cliente.nombreCompleto}', style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -122,7 +128,7 @@ class NuevoPrestamoScreen extends StatelessWidget {
                   const SizedBox(height: 6),
                   _KV('Cuota aproximada', _money(propuesta.cuota)),
                   const SizedBox(height: 6),
-                  _KV('Total aproximado a pagar', _money(totalAPagarAproximado)),
+                  _KV('Total a pagar', _money(totalAPagarAproximado)),
                 ],
               ),
             ),
@@ -130,8 +136,8 @@ class NuevoPrestamoScreen extends StatelessWidget {
           const SizedBox(height: 20),
           FilledButton.icon(
             onPressed: () => _guardar(context),
-            icon: const Icon(Icons.save_outlined),
-            label: const Text('Guardar'),
+            icon: const Icon(Icons.person_add_alt_1_outlined),
+            label: const Text('Asignar préstamo al cliente'),
           ),
         ],
       ),
