@@ -1,6 +1,7 @@
 // lib/screens/calculadora_screen.dart
 import 'package:flutter/material.dart';
 import '../models/prestamo_propuesta.dart';
+import '../widgets/app_drawer.dart';
 
 class CalculadoraScreen extends StatefulWidget {
   const CalculadoraScreen({super.key, this.returnMode = false});
@@ -72,6 +73,11 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
     final cardW = screenW > maxCardWidth ? maxCardWidth : screenW;
 
     return Scaffold(
+
+      
+
+// Muestra tu Drawer en esta pantalla
+      drawer: const AppDrawer(current: AppSection.inicio),
       appBar: AppBar(title: const Text('Calculadora')),
       body: Center(
         child: SizedBox(

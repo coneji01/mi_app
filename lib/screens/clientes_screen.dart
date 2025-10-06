@@ -1,6 +1,6 @@
 // lib/screens/clientes_screen.dart
 import 'package:flutter/material.dart';
-
+import '../widgets/app_drawer.dart';
 import '../data/db_service.dart';
 import '../models/cliente.dart';
 import 'nuevo_cliente_screen.dart';
@@ -65,6 +65,8 @@ class _ClientesScreenState extends State<ClientesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Muestra tu Drawer en esta pantalla
+      drawer: const AppDrawer(current: AppSection.clientes),
       appBar: AppBar(
         title: const Text('Clientes'),
         actions: [

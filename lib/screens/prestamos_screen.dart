@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../data/db_service.dart';
 import '../routes/nav.dart'; // pushPrestamoDetalle, etc.
+import '../widgets/app_drawer.dart';
 
 class PrestamosScreen extends StatefulWidget {
   const PrestamosScreen({super.key});
@@ -227,6 +228,8 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
                   )));
 
     return Scaffold(
+      // Muestra tu Drawer en esta pantalla
+      drawer: const AppDrawer(current: AppSection.prestamos),
       appBar: AppBar(
         title: const Text('Préstamos'),
         actions: [

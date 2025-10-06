@@ -2,6 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Flutter - Emulador Pixel (ejemplo)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "deviceId": "emulator-5554"
+    },
+    {
       "name": "Flutter (Elegir dispositivo)",
       "type": "dart",
       "request": "launch",
@@ -13,13 +20,7 @@
       "request": "launch",
       "program": "lib/main.dart",
       "deviceId": "windows"
-    },
-    {
-      "name": "Flutter - Emulador Pixel (ejemplo)",
-      "type": "dart",
-      "request": "launch",
-      "program": "lib/main.dart",
-      "deviceId": "emulator-5554"
     }
+   
   ]
 }

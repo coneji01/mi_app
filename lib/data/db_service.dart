@@ -27,54 +27,109 @@ class DbService {
     final path = join(await getDatabasesPath(), 'mi_app.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 3, // ⬅️ subimos versión para aplicar migración
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
       onCreate: (db, version) async {
-        // ⚠️ Ajusta columnas si tu esquema real difiere.
+        // Esquema laxo (permite NULL) en clientes (snake_case)
         await db.execute('''
           CREATE TABLE clientes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            apellido TEXT NOT NULL,
-            telefono TEXT,
-            direccion TEXT,
-            cedula TEXT,
-            sexo INTEGER,
-            creadoEn TEXT NOT NULL,   -- ISO-8601
-            fotoPath TEXT
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre     TEXT,
+            apellido   TEXT,
+            telefono   TEXT,
+            direccion  TEXT,
+            cedula     TEXT,
+            sexo       TEXT,   -- 'M' | 'F' | 'O'
+            creado_en  TEXT,   -- ISO-8601
+            foto_path  TEXT
           );
         ''');
 
+        // prestamos/pagos en camelCase, como usa tu código
         await db.execute('''
           CREATE TABLE prestamos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            clienteId INTEGER NOT NULL,
-            monto REAL NOT NULL,
-            balancePendiente REAL NOT NULL,
-            totalAPagar REAL NOT NULL,
-            cuotasTotales INTEGER NOT NULL,
-            cuotasPagadas INTEGER NOT NULL,
-            interes REAL NOT NULL,          -- 0..1 por periodo
-            modalidad TEXT NOT NULL,
-            tipoAmortizacion TEXT NOT NULL,
-            fechaInicio TEXT NOT NULL,      -- ISO-8601
-            proximoPago TEXT,               -- ISO-8601
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            clienteId         INTEGER NOT NULL,
+            monto             REAL    NOT NULL,
+            balancePendiente  REAL    NOT NULL,
+            totalAPagar       REAL    NOT NULL,
+            cuotasTotales     INTEGER NOT NULL,
+            cuotasPagadas     INTEGER NOT NULL,
+            interes           REAL    NOT NULL,  -- 0..1 por periodo
+            modalidad         TEXT    NOT NULL,
+            tipoAmortizacion  TEXT    NOT NULL,
+            fechaInicio       TEXT    NOT NULL,  -- ISO-8601
+            proximoPago       TEXT,              -- ISO-8601
             FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
           );
         ''');
 
         await db.execute('''
           CREATE TABLE pagos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
             prestamoId INTEGER NOT NULL,
-            monto REAL NOT NULL,
-            fecha TEXT NOT NULL,            -- ISO-8601
-            nota TEXT,
+            monto      REAL    NOT NULL,
+            fecha      TEXT    NOT NULL,   -- ISO-8601
+            nota       TEXT,
             FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
           );
         ''');
+      },
+      onUpgrade: (db, oldV, newV) async {
+        // v2 ya recreaba "clientes" a snake_case
+        if (oldV < 2) {
+          await db.execute('DROP TABLE IF EXISTS clientes;');
+          await db.execute('''
+            CREATE TABLE clientes (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              nombre     TEXT,
+              apellido   TEXT,
+              telefono   TEXT,
+              direccion  TEXT,
+              cedula     TEXT,
+              sexo       TEXT,
+              creado_en  TEXT,
+              foto_path  TEXT
+            );
+          ''');
+        }
+
+        // v3: asegurar columnas camelCase en prestamos/pagos (clienteId, prestamoId)
+        if (oldV < 3) {
+          await db.execute('DROP TABLE IF EXISTS pagos;');
+          await db.execute('DROP TABLE IF EXISTS prestamos;');
+
+          await db.execute('''
+            CREATE TABLE prestamos (
+              id                INTEGER PRIMARY KEY AUTOINCREMENT,
+              clienteId         INTEGER NOT NULL,
+              monto             REAL    NOT NULL,
+              balancePendiente  REAL    NOT NULL,
+              totalAPagar       REAL    NOT NULL,
+              cuotasTotales     INTEGER NOT NULL,
+              cuotasPagadas     INTEGER NOT NULL,
+              interes           REAL    NOT NULL,
+              modalidad         TEXT    NOT NULL,
+              tipoAmortizacion  TEXT    NOT NULL,
+              fechaInicio       TEXT    NOT NULL,
+              proximoPago       TEXT,
+              FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
+            );
+          ''');
+
+          await db.execute('''
+            CREATE TABLE pagos (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              prestamoId INTEGER NOT NULL,
+              monto      REAL    NOT NULL,
+              fecha      TEXT    NOT NULL,
+              nota       TEXT,
+              FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
+            );
+          ''');
+        }
       },
     );
   }
@@ -98,18 +153,23 @@ class DbService {
 
   // ────────────────── CLIENTES ──────────────────
 
+  /// Convierte '' -> null para guardar "vacío" como NULL
+  String? _n(String? s) => (s == null || s.trim().isEmpty) ? null : s.trim();
+
   Future<int> insertCliente(Cliente c) async {
     final db = await _db;
+
     final data = <String, Object?>{
-      'nombre'   : c.nombre,
-      'apellido' : c.apellido,
-      'telefono' : c.telefono,
-      'direccion': c.direccion,
-      'cedula'   : c.cedula,
-      'sexo'     : c.sexo?.index,   // enum -> int
-      'creadoEn' : c.creadoEn,
-      'fotoPath' : c.fotoPath,
+      'nombre'    : _n(c.nombre),
+      'apellido'  : _n(c.apellido),
+      'telefono'  : _n(c.telefono),
+      'direccion' : _n(c.direccion),
+      'cedula'    : _n(c.cedula),
+      'sexo'      : SexoCodec.toDb(c.sexo), // 'M','F','O' o null
+      'creado_en' : _n(c.creadoEn),         // snake_case
+      'foto_path' : _n(c.fotoPath),         // snake_case
     };
+
     return db.insert('clientes', data, conflictAlgorithm: ConflictAlgorithm.abort);
   }
 
@@ -118,16 +178,18 @@ class DbService {
     if (c.id == null) {
       throw ArgumentError('Cliente.id es requerido para actualizar');
     }
+
     final data = <String, Object?>{
-      'nombre'   : c.nombre,
-      'apellido' : c.apellido,
-      'telefono' : c.telefono,
-      'direccion': c.direccion,
-      'cedula'   : c.cedula,
-      'sexo'     : c.sexo?.index,
-      'creadoEn' : c.creadoEn,
-      'fotoPath' : c.fotoPath,
+      'nombre'    : _n(c.nombre),
+      'apellido'  : _n(c.apellido),
+      'telefono'  : _n(c.telefono),
+      'direccion' : _n(c.direccion),
+      'cedula'    : _n(c.cedula),
+      'sexo'      : SexoCodec.toDb(c.sexo),
+      'creado_en' : _n(c.creadoEn),
+      'foto_path' : _n(c.fotoPath),
     };
+
     return db.update(
       'clientes',
       data,
@@ -157,7 +219,8 @@ class DbService {
     final off = (offset != null && offset > 0) ? ' OFFSET $offset' : '';
 
     final rows = await db.rawQuery('''
-      SELECT id, nombre, apellido, telefono, direccion, cedula, sexo, creadoEn, fotoPath
+      SELECT
+        id, nombre, apellido, telefono, direccion, cedula, sexo, creado_en, foto_path
       FROM clientes
       $where
       ORDER BY nombre COLLATE NOCASE ASC, apellido COLLATE NOCASE ASC
@@ -243,7 +306,7 @@ class DbService {
   // ────────────────── PAGOS ──────────────────
 
   /// Inserta un pago y, si `tipo == 'capital'`, reduce el balancePendiente.
-  /// NOTA: el `tipo` se guarda como etiqueta dentro de `nota` -> "[tipo] ...".
+  /// NOTA: `tipo` se guarda como etiqueta dentro de `nota` -> "[tipo] ...".
   Future<void> agregarPagoRapido({
     required int prestamoId,
     required double monto,
@@ -278,10 +341,9 @@ class DbService {
         if (rows.isNotEmpty) {
           final bal = (rows.first['balancePendiente'] as num?)?.toDouble() ?? 0.0;
           final nuevo = bal - monto;
-          final nuevoClamp = nuevo < 0 ? 0.0 : nuevo;
           await txn.update(
             'prestamos',
-            {'balancePendiente': nuevoClamp},
+            {'balancePendiente': (nuevo < 0 ? 0.0 : nuevo)},
             where: 'id = ?',
             whereArgs: [prestamoId],
           );
