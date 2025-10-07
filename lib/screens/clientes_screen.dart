@@ -1,10 +1,9 @@
-// lib/screens/clientes_screen.dart
 import 'package:flutter/material.dart';
 import '../widgets/app_drawer.dart';
 import '../data/db_service.dart';
 import '../models/cliente.dart';
 import 'nuevo_cliente_screen.dart';
-import 'cliente_detalle_screen.dart';
+import 'package:mi_app/screens/cliente_detalle_screen.dart'; // <-- deja este o el relativo, no ambos
 
 class ClientesScreen extends StatefulWidget {
   const ClientesScreen({super.key});
@@ -19,7 +18,6 @@ class _ClientesScreenState extends State<ClientesScreen> {
   bool _cargando = true;
   String? _error;
 
-  // normaliza: recorta y convierte null -> ''
   String _nn(String? s) => s?.trim() ?? '';
 
   @override
@@ -30,7 +28,7 @@ class _ClientesScreenState extends State<ClientesScreen> {
 
   Future<void> _cargar() async {
     try {
-      final data = await _db.getClientes(); // tipado a List<Cliente>
+      final data = await _db.getClientes();
       if (!mounted) return;
       setState(() {
         _clientes = data;
@@ -65,16 +63,11 @@ class _ClientesScreenState extends State<ClientesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Muestra tu Drawer en esta pantalla
       drawer: const AppDrawer(current: AppSection.clientes),
       appBar: AppBar(
         title: const Text('Clientes'),
         actions: [
-          IconButton(
-            onPressed: _cargar,
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Recargar',
-          ),
+          IconButton(onPressed: _cargar, icon: const Icon(Icons.refresh)),
         ],
       ),
       body: _cargando
@@ -91,16 +84,12 @@ class _ClientesScreenState extends State<ClientesScreen> {
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (_, i) {
                         final c = _clientes[i];
-
-                        // título: nombre + apellido (evitando null/espacios)
                         final titulo = [_nn(c.nombre), _nn(c.apellido)]
                             .where((s) => s.isNotEmpty)
                             .join(' ');
-
-                        // subtítulo: teléfono si hay, si no dirección
-                        final subtituloSrc =
-                            _nn(c.telefono).isNotEmpty ? _nn(c.telefono) : _nn(c.direccion);
-
+                        final subtituloSrc = _nn(c.telefono).isNotEmpty
+                            ? _nn(c.telefono)
+                            : _nn(c.direccion);
                         return ListTile(
                           title: Text(titulo.isEmpty ? 'Sin nombre' : titulo),
                           subtitle:

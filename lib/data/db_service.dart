@@ -57,7 +57,7 @@ class DbService {
             totalAPagar       REAL    NOT NULL,
             cuotasTotales     INTEGER NOT NULL,
             cuotasPagadas     INTEGER NOT NULL,
-            interes           REAL    NOT NULL,  -- 0..1 por periodo
+            interes           REAL    NOT NULL,  -- % por periodo
             modalidad         TEXT    NOT NULL,
             tipoAmortizacion  TEXT    NOT NULL,
             fechaInicio       TEXT    NOT NULL,  -- ISO-8601
@@ -361,5 +361,102 @@ class DbService {
       whereArgs: [prestamoId],
       orderBy: 'fecha DESC, id DESC',
     );
+  }
+
+  // ============ NUEVO: registrar pago de cuota ============
+  /// Registra un pago desglosado (capital/interés/mora/otros) y
+  /// actualiza: balance, cuotasPagadas y proximoPago.
+  Future<void> registrarPagoCuota({
+    required int prestamoId,
+    required int numeroCuota, // 1..N (informativo por ahora)
+    double capital = 0,
+    double interes = 0,
+    double mora = 0,
+    double otros = 0,
+    String? nota,
+  }) async {
+    final db = await _db;
+    final ahoraIso = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      // 1) Traer préstamo actual
+      final prRows = await txn.query(
+        'prestamos',
+        where: 'id = ?',
+        whereArgs: [prestamoId],
+        limit: 1,
+      );
+      if (prRows.isEmpty) {
+        throw StateError('Préstamo $prestamoId no existe');
+      }
+      final pr = prRows.first;
+      final double balance = (pr['balancePendiente'] as num?)?.toDouble() ?? 0.0;
+      final int cuotasTotales = (pr['cuotasTotales'] as num).toInt();
+      final int cuotasPagadas = (pr['cuotasPagadas'] as num?)?.toInt() ?? 0;
+      final String modalidad = (pr['modalidad'] as String?) ?? 'Quincenal';
+      final String? fechaInicioIso = pr['fechaInicio'] as String?;
+      final String? proximoPagoIso = pr['proximoPago'] as String?;
+
+      // 2) Insertar renglones de pagos (uno por concepto > 0)
+      Future<void> _ins(double monto, String tag) async {
+        if (monto <= 0) return;
+        await txn.insert('pagos', {
+          'prestamoId': prestamoId,
+          'monto': monto,
+          'fecha': ahoraIso,
+          'nota': '[$tag] ${nota ?? ''}'.trim(),
+        });
+      }
+
+      await _ins(capital,  'capital');
+      await _ins(interes,  'interes');
+      await _ins(mora,     'mora');
+      await _ins(otros,    'otros');
+
+      // 3) Recalcular balance (solo capital reduce)
+      final nuevoBalance = balance - capital;
+      final balanceFinal = nuevoBalance < 0 ? 0.0 : nuevoBalance;
+
+      // 4) Avanzar una cuota (tope N)
+      final nuevasCuotasPagadas =
+          (cuotasPagadas + 1) > cuotasTotales ? cuotasTotales : (cuotasPagadas + 1);
+
+      // 5) Calcular próximo pago según modalidad
+      String? calcProx(String? baseIso) {
+        DateTime base;
+        if (baseIso != null) {
+          base = DateTime.tryParse(baseIso) ?? DateTime.now();
+        } else if (fechaInicioIso != null) {
+          base = DateTime.tryParse(fechaInicioIso) ?? DateTime.now();
+        } else {
+          base = DateTime.now();
+        }
+        final low = modalidad.toLowerCase();
+        Duration paso;
+        if (low.contains('seman')) {
+          paso = const Duration(days: 7);
+        } else if (low.contains('mens')) {
+          paso = const Duration(days: 30);
+        } else {
+          paso = const Duration(days: 14); // quincenal
+        }
+        return base.add(paso).toIso8601String();
+      }
+
+      final nuevoProximoPago =
+          (nuevasCuotasPagadas >= cuotasTotales) ? null : calcProx(proximoPagoIso);
+
+      // 6) Actualizar préstamo
+      await txn.update(
+        'prestamos',
+        {
+          'balancePendiente': balanceFinal,
+          'cuotasPagadas': nuevasCuotasPagadas,
+          'proximoPago': nuevoProximoPago,
+        },
+        where: 'id = ?',
+        whereArgs: [prestamoId],
+      );
+    });
   }
 }

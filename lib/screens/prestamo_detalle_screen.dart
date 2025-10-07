@@ -1,11 +1,14 @@
 // lib/screens/prestamo_detalle_screen.dart
 import 'package:flutter/material.dart';
 
-import '../data/db_service.dart';        // ✅ Servicio correcto (singleton)
-import '../models/prestamo.dart';        // Modelo Prestamo (id, clienteId, etc.)
+import '../data/db_service.dart';
+import '../models/prestamo.dart';
+import '../widgets/app_drawer.dart';
+import 'agregar_pago_screen.dart';
 
 class PrestamoDetalleScreen extends StatefulWidget {
-  final int prestamoId;
+  /// Pásame un id válido por constructor o por arguments
+  final int? prestamoId;
   final String? clienteNombre;
 
   const PrestamoDetalleScreen({
@@ -18,9 +21,7 @@ class PrestamoDetalleScreen extends StatefulWidget {
   State<PrestamoDetalleScreen> createState() => _PrestamoDetalleScreenState();
 }
 
-class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen>
-    with SingleTickerProviderStateMixin {
-  // ✅ Instancia válida del servicio
+class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
   final _db = DbService.instance;
 
   Prestamo? _prestamo;
@@ -28,36 +29,73 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen>
   bool _loading = true;
   String? _error;
 
+  // evita recargas dobles desde initState + didChangeDependencies
+  bool _loadedOnce = false;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    // no llamamos _load() aquí para poder leer arguments con context
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_loadedOnce) {
+      _loadedOnce = true;
+      _load();
+    }
   }
 
   Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
     try {
-      final p = await _db.getPrestamoById(widget.prestamoId);
-      final rows = await _db.listarPagosDePrestamo(widget.prestamoId);
+      // 1) obtener id del constructor o de arguments
+      int? id = widget.prestamoId;
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is int) id ??= args;
+
+      if (id == null || id <= 0) {
+        throw Exception('ID de préstamo inválido.');
+      }
+
+      // 2) cargar préstamo y pagos
+      final prestamo = await _db.getPrestamoById(id);
+      if (prestamo == null) throw Exception('No existe el préstamo #$id.');
+      final pagos = await _db.listarPagosDePrestamo(id);
 
       if (!mounted) return;
       setState(() {
-        _prestamo = p;
-        _pagos = (rows as List).cast<Map<String, dynamic>>();
-        _error = null;
+        _prestamo = prestamo;
+        _pagos = pagos;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        _error = e.toString();
         _loading = false;
       });
     }
   }
 
-  String _money(num? v) {
-    final n = (v ?? 0).toDouble();
-    final s = n.toStringAsFixed(n.truncateToDouble() == n ? 0 : 2);
+  // ===== UI Helpers =====
+  double _asDouble(dynamic v, [double fb = 0]) {
+    if (v == null) return fb;
+    if (v is double) return v;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? fb;
+  }
+
+  String _asString(dynamic v, [String fb = '']) => v?.toString() ?? fb;
+
+  String _fmtMoney(num? v) {
+    final d = (v ?? 0).toDouble();
+    final s = d.toStringAsFixed(d.truncateToDouble() == d ? 0 : 2);
     final parts = s.split('.');
     final intPart = parts[0].replaceAllMapped(
       RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
@@ -70,108 +108,169 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen>
     if (iso == null || iso.isEmpty) return '—';
     final d = DateTime.tryParse(iso);
     if (d == null) return '—';
-    const dias = ['lu', 'ma', 'mi', 'ju', 'vi', 'sá', 'do'];
-    const mes = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-    final dow = dias[(d.weekday - 1).clamp(0, 6)];
-    final m = mes[(d.month - 1).clamp(0, 11)];
+    final y = d.year.toString();
+    final m = d.month.toString().padLeft(2, '0');
     final dd = d.day.toString().padLeft(2, '0');
-    return '$dow, $dd $m. ${d.year}';
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    return '$y-$m-$dd $hh:$mm';
   }
 
-  Widget _header() {
+  // ===== Acciones =====
+  Future<void> _goAgregarPago() async {
     final p = _prestamo;
-    if (p == null) return const SizedBox.shrink();
+    if (p == null || p.id == null) return;
 
-    return Card(
-      margin: const EdgeInsets.all(12),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.clienteNombre?.isNotEmpty == true
-                  ? widget.clienteNombre!
-                  : 'Cliente #${p.clienteId}',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              runSpacing: 6,
-              spacing: 16,
-              children: [
-                Text('Monto: ${_money(p.monto)}'),
-                Text('Balance: ${_money(p.balancePendiente)}'),
-                
-                Text('Cuotas: ${p.cuotasPagadas}/${p.cuotasTotales}'),
-                Text('Próximo pago: ${_fmtFecha(p.proximoPago)}'),
-              ],
-            ),
-          ],
-        ),
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => AgregarPagoScreen(prestamoId: p.id!), // ← FIX
       ),
     );
+    if (ok == true) _load(); // refresca resumen e historial
   }
 
-  Widget _pagoTile(Map<String, dynamic> r) {
-    final fecha = _fmtFecha(r['fecha'] as String?);
-    final monto = _money((r['monto'] as num?) ?? 0);
-    final nota  = (r['nota'] as String?)?.trim();
-
-    return ListTile(
-      leading: const Icon(Icons.payments_outlined),
-      title: Text(monto),
-      subtitle: Text(nota?.isNotEmpty == true ? '$fecha · $nota' : fecha),
-      dense: true,
-    );
+  void _onMenu(String action) {
+    // Stubs; luego conectamos lógica real
+    switch (action) {
+      case 'editar':
+      case 'anular':
+      case 'ajustar_capital':
+      case 'recalcular_mora':
+      case 'reenganche':
+      case 'incobrable':
+      case 'imprimir_contrato':
+      case 'imprimir_estado':
+      case 'contactar':
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Acción "$action" pendiente de implementación')),
+        );
+        break;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final body = _loading
-        ? const Center(child: CircularProgressIndicator())
-        : (_error != null
-            ? Center(child: Text('Error: $_error'))
-            : RefreshIndicator(
-                onRefresh: _load,
-                child: ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  children: [
-                    _header(),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(
-                        'Pagos',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    if (_pagos.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        child: Text('Sin pagos registrados'),
-                      )
-                    else
-                      ..._pagos.map(_pagoTile),
-                    const SizedBox(height: 24),
-                  ],
-                ),
-              ));
-
     return Scaffold(
+      drawer: const AppDrawer(current: AppSection.inicio),
       appBar: AppBar(
         title: const Text('Detalle de préstamo'),
         actions: [
-          IconButton(
-            tooltip: 'Refrescar',
-            onPressed: _load,
-            icon: const Icon(Icons.refresh),
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+          PopupMenuButton<String>(
+            onSelected: _onMenu,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'editar',            child: Text('Editar')),
+              PopupMenuItem(value: 'anular',            child: Text('Anular Préstamo')),
+              PopupMenuItem(value: 'ajustar_capital',   child: Text('Ajustar Capital')),
+              PopupMenuItem(value: 'recalcular_mora',   child: Text('Recalcular Mora')),
+              PopupMenuItem(value: 'reenganche',        child: Text('Reenganche')),
+              PopupMenuItem(value: 'incobrable',        child: Text('Incobrable')),
+              PopupMenuDivider(),
+              PopupMenuItem(value: 'imprimir_contrato', child: Text('Imprimir Contrato')),
+              PopupMenuItem(value: 'imprimir_estado',   child: Text('Imprimir Estado')),
+              PopupMenuDivider(),
+              PopupMenuItem(value: 'contactar',         child: Text('Contactar')),
+            ],
           ),
         ],
       ),
-      body: body,
+
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _goAgregarPago,
+        icon: const Icon(Icons.attach_money),
+        label: const Text('AGREGAR PAGO'),
+      ),
+
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                )
+              : _buildDetalle(),
     );
   }
+
+  Widget _buildDetalle() {
+    final p = _prestamo!;
+    final id = p.id ?? 0;
+    final nombreCliente = widget.clienteNombre ?? '—';
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('Préstamo #$id',
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        Text('Cliente: $nombreCliente'),
+        const SizedBox(height: 12),
+
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _fila('Monto', _fmtMoney(p.monto)),
+                _fila('Total a pagar', _fmtMoney(p.totalAPagar)),
+                _fila('Saldo', _fmtMoney(p.balancePendiente)),
+                _fila('Cuotas', '${p.cuotasPagadas} de ${p.cuotasTotales}'),
+                _fila('Interés', '${p.interes} %'),
+                _fila('Modalidad', p.modalidad),
+                _fila('Amortización', p.tipoAmortizacion),
+                _fila('Inicio', _fmtFecha(p.fechaInicio)),
+                _fila('Próximo pago', _fmtFecha(p.proximoPago)),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+        const Text('Pagos',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+
+        if (_pagos.isEmpty)
+          const Text('Aún no hay pagos registrados.')
+        else
+          ..._pagos.map(
+            (pg) => Card(
+              child: ListTile(
+                dense: true,
+                title: Text(_fmtMoney(_asDouble(pg['monto']))),
+                subtitle: Text(
+                  'Fecha: ${_fmtFecha(_asString(pg['fecha']))}'
+                  '${_asString(pg['nota']).isNotEmpty ? '\nNota: ${_asString(pg['nota'])}' : ''}',
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 80), // margen para el FAB
+      ],
+    );
+  }
+
+  Widget _fila(String etiqueta, String valor) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 160,
+            child: Text(etiqueta,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          Expanded(child: Text(valor)),
+        ],
+      ),
+    );
+  }
+  
 }

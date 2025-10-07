@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/cliente.dart';
 import '../models/prestamo_propuesta.dart';
-import '../data/db_service.dart';                 // ✅ servicio correcto
+import '../data/db_service.dart';
 
 import 'calculadora_screen.dart';
 import 'nuevo_prestamo_screen.dart';
@@ -25,9 +25,10 @@ class ClienteDetalleScreen extends StatefulWidget {
 }
 
 class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
-  final _db = DbService.instance;                // ✅ singleton
-  late Cliente _cliente;                         // estado local
-  bool _touched = false;                         // hubo cambios
+  final _db = DbService.instance;
+
+  late Cliente _cliente;   // estado local
+  bool _touched = false;   // hubo cambios
 
   @override
   void initState() {
@@ -40,11 +41,11 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
     final id = _cliente.id;
     if (id == null) return;
     try {
-      final fresh = await _db.getClienteById(id); // ✅ método del servicio
+      final fresh = await _db.getClienteById(id);
       if (!mounted) return;
       if (fresh != null) setState(() => _cliente = fresh);
     } catch (_) {
-      // Silenciar errores de refresco suave
+      // refresco silencioso
     }
   }
 
@@ -84,6 +85,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
           return;
         }
 
+        // 1) Obtenemos propuesta desde calculadora (en modo retorno)
         final propuesta = await Navigator.of(context).push<PrestamoPropuesta>(
           MaterialPageRoute(
             builder: (_) => const CalculadoraScreen(returnMode: true),
@@ -91,6 +93,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
         );
         if (!context.mounted || propuesta == null) return;
 
+        // 2) Abrimos la pantalla de nuevo préstamo con cliente + propuesta
         await Navigator.of(context).push<void>(
           MaterialPageRoute(
             builder: (_) => NuevoPrestamoScreen(
@@ -115,7 +118,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             _touched = true;
           });
         } else if (result == true) {
-          await _refreshFromDb(); // compat
+          await _refreshFromDb();
           _touched = true;
         }
         break;
@@ -197,7 +200,10 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
                 Expanded(
                   child: Text(
                     '${_cliente.nombre} ${_cliente.apellido}'.trim(),
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                     maxLines: 2,
                   ),
                 ),
