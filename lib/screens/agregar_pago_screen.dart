@@ -47,9 +47,9 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
   double _interesPorCuota = 0;
   double _cuotaTotal = 0;
 
-  // Resumen
-  double _mora = 0;      // placeholder
-  double _pendiente = 0; // placeholder
+  // Resumen (placeholders)
+  double _mora = 0;
+  double _pendiente = 0;
 
   // Totales de la operación
   double _capitalAPagar = 0;
@@ -85,12 +85,12 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       final p = await DbService.instance.getPrestamoById(widget.prestamoId);
       if (p == null) throw Exception('No existe el préstamo #${widget.prestamoId}.');
 
-      // Cálculos base (tu fórmula simple: total = monto + monto*i*n)
+      // Base simple: capital/periodo + interés/periodo
       _capitalPorCuota = p.monto / p.cuotasTotales;
       _interesPorCuota = p.monto * (p.interes / 100.0);
       _cuotaTotal = _capitalPorCuota + _interesPorCuota;
 
-      // Cuotas restantes (enteros, sin num)
+      // Cuotas restantes
       final rest = p.cuotasTotales - p.cuotasPagadas;
       final restantesPos = rest <= 0 ? 1 : rest;
       _opcionesCuotas = List<int>.generate(restantesPos, (i) => i + 1);
@@ -120,7 +120,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     final low = modalidad.toLowerCase();
     if (low.contains('seman')) return d.add(Duration(days: 7 * n));
     if (low.contains('mens')) return d.add(Duration(days: 30 * n));
-    return d.add(Duration(days: 14 * n)); // quincenal
+    return d.add(Duration(days: 15 * n)); // quincenal
   }
 
   void _recalcular() {
@@ -142,7 +142,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     }
 
     // Descuento contra capital primero
-    final capitalConDesc = math.max(0.0, _capitalAPagar - _descuento);
+    final double capitalConDesc = math.max(0.0, _capitalAPagar - _descuento);
     _totalAPagar = capitalConDesc + _interesAPagar + _otros;
 
     setState(() {}); // refrescar
@@ -194,11 +194,11 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
         );
       }
 
-      final capitalConDesc = math.max(0.0, _capitalAPagar - _descuento);
+      final double capitalConDesc = math.max(0.0, _capitalAPagar - _descuento);
       if (capitalConDesc > 0) {
         await DbService.instance.agregarPagoRapido(
           prestamoId: p.id!,
-          monto: capitalConDesc, // double ✅
+          monto: capitalConDesc,
           tipo: 'capital',
           nota: 'Pago capital x$_nCuotas cuotas. ${_comentarioCtrl.text.trim()}'.trim(),
         );
@@ -281,7 +281,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
                 )
               : _buildContent(),
 
-      // Barra inferior con Total y botones
+      // Barra inferior con Total y botones (estilo similar a tus capturas)
       bottomNavigationBar: _loading || _error != null
           ? null
           : SafeArea(
@@ -343,7 +343,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
 
   Widget _buildContent() {
     return Form(
-      key: _formKey, // ahora sí se usa
+      key: _formKey,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [

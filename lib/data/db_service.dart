@@ -4,6 +4,7 @@ import 'package:path/path.dart';
 
 import '../models/cliente.dart';
 import '../models/prestamo.dart';
+import '../models/pago_vista.dart'; // ← DTO para la pantalla de Pagos
 
 class DbService {
   // ────────────────── Singleton ──────────────────
@@ -459,4 +460,30 @@ class DbService {
       );
     });
   }
+
+  // ============ NUEVO: Pagos con nombre de cliente ============
+  /// Devuelve pagos + nombre de cliente (para la pantalla Pagos).
+  Future<List<PagoVista>> listarPagosConCliente({int? limit}) async {
+    final db = await _db;
+    final lim = (limit != null && limit > 0) ? ' LIMIT $limit' : '';
+
+    final rows = await db.rawQuery('''
+      SELECT
+        pg.id                AS pagoId,
+        pg.prestamoId        AS prestamoId,
+        pr.clienteId         AS clienteId,
+        TRIM(COALESCE(c.nombre, '') || ' ' || COALESCE(c.apellido, '')) AS clienteNombre,
+        pg.monto             AS monto,
+        pg.fecha             AS fecha,
+        pg.nota              AS nota
+      FROM pagos pg
+      INNER JOIN prestamos pr ON pr.id = pg.prestamoId
+      LEFT JOIN clientes  c   ON c.id = pr.clienteId
+      ORDER BY pg.fecha DESC, pg.id DESC
+      $lim
+    ''');
+
+    return rows.map((m) => PagoVista.fromMap(m)).toList();
+  }
 }
+

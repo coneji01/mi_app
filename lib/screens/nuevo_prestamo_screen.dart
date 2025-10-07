@@ -142,17 +142,19 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
     }
   }
 
+  // ---- Helpers de periodicidad (7 / 15 / 30 días) ----
+  int _diasPeriodo(String modalidad) {
+    final m = modalidad.toLowerCase();
+    if (m.contains('seman')) return 7;   // semanal
+    if (m.contains('quin'))  return 15;  // quincenal
+    if (m.contains('mens'))  return 30;  // mensual
+    if (m.contains('diar'))  return 1;   // opcional: diario
+    return 15;                            // por defecto, quincenal
+  }
+
   String? _calcularProximoPago(DateTime inicio, String modalidad) {
-    final mod = modalidad.toLowerCase();
-    Duration paso;
-    if (mod.contains('seman')) {
-      paso = const Duration(days: 7);
-    } else if (mod.contains('mens')) {
-      paso = const Duration(days: 30);
-    } else {
-      paso = const Duration(days: 14); // quincenal
-    }
-    return inicio.add(paso).toIso8601String();
+    final dias = _diasPeriodo(modalidad);
+    return inicio.add(Duration(days: dias)).toIso8601String();
   }
 
   double _asDouble(String? s, [double fb = 0]) {
@@ -467,7 +469,7 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
                     onChanged: (v) {
                       if (v == null) return;
                       setState(() => _modalidad = v);
-                      _recalcularTotal(); // recalcular si cambias modalidad
+                      _recalcularTotal(); // si quieres recalcular vista previa
                     },
                   ),
                 ),
