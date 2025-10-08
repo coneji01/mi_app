@@ -30,9 +30,12 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
   static const _modos = ['CUOTA COMPLETA', 'SOLO INTERÉS', 'SOLO CAPITAL'];
   String _modo = _modos.first;
 
-  // Nº de cuotas a pagar
+  // Nº de cuotas a pagar (1..restantes)
   int _nCuotas = 1;
   List<int> _opcionesCuotas = const [1];
+
+  // PRIMERA CUOTA PENDIENTE (ABSOLUTA) => p.cuotasPagadas + 1
+  int _primeraPendienteAbs = 1;
 
   // Fecha de pago (visual)
   DateTime _fechaPago = DateTime.now();
@@ -96,6 +99,9 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       _opcionesCuotas = List<int>.generate(restantesPos, (i) => i + 1);
       _nCuotas = 1;
 
+      // Primera cuota ABS pendiente
+      _primeraPendienteAbs = p.cuotasPagadas + 1;
+
       _p = p;
       _recalcular();
 
@@ -116,11 +122,56 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     return double.tryParse(s.replaceAll(',', '.')) ?? 0;
   }
 
-  DateTime _sumarPeriodos(DateTime d, String modalidad, int n) {
+  // Paso de período según modalidad
+  Duration _step(String modalidad) {
     final low = modalidad.toLowerCase();
-    if (low.contains('seman')) return d.add(Duration(days: 7 * n));
-    if (low.contains('mens')) return d.add(Duration(days: 30 * n));
-    return d.add(Duration(days: 15 * n)); // quincenal
+    if (low.contains('seman')) return const Duration(days: 7);
+    if (low.contains('mens')) return const Duration(days: 30);
+    return const Duration(days: 15); // quincenal (ajusta a 14 si así lo manejas)
+  }
+
+  DateTime _sumarPeriodos(DateTime d, String modalidad, int n) {
+    final s = _step(modalidad);
+    return d.add(Duration(days: s.inDays * n));
+  }
+
+  // Solo fecha (00:00) para comparar días
+  DateTime _soloFecha(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  // Próxima fecha de vencimiento (#cuota = cuotasPagadas+1)
+  DateTime _primeraFechaVencimiento(Prestamo p) {
+    final isoProx = p.proximoPago;
+    if (isoProx != null && isoProx.isNotEmpty) {
+      return DateTime.tryParse(isoProx) ?? DateTime.now();
+    }
+    final inicio = DateTime.tryParse(p.fechaInicio ?? '');
+    if (inicio == null) return DateTime.now();
+    final k = (p.cuotasPagadas) + 1;
+    return _sumarPeriodos(inicio, p.modalidad, math.max(k, 1));
+  }
+
+  // Fecha de vencimiento de la cuota relativa (1 = la próxima sin pagar)
+  DateTime _fechaVencCuotaRel(int n) {
+    final p = _p!;
+    final first = _primeraFechaVencimiento(p);
+    if (n <= 1) return first;
+    return _sumarPeriodos(first, p.modalidad, n - 1);
+  }
+
+  // ¿Está pendiente la cuota ABSOLUTA N?
+  bool _estaPendienteAbs(int absIndex) {
+    // Convertimos la absoluta a relativa (1..restantes)
+    final rel = absIndex - _primeraPendienteAbs + 1;
+    final due = _soloFecha(_fechaVencCuotaRel(rel));
+    final hoy = _soloFecha(DateTime.now());
+    return !due.isAfter(hoy); // due <= hoy
+  }
+
+  // Etiqueta: "Cuota N" (y "(Pendiente)" si corresponde a ESA cuota)
+  String _labelCuota(int n) {
+    final abs = _primeraPendienteAbs + n - 1;
+    final base = 'Cuota $abs';
+    return _estaPendienteAbs(abs) ? '$base (Pendiente)' : base;
   }
 
   void _recalcular() {
@@ -180,7 +231,6 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     setState(() => _saving = true);
     try {
       final p = _p!;
-      final db = await DbService.instance.database;
 
       _recalcular(); // por si cambió algo al final
 
@@ -218,10 +268,13 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       // 2) Actualizar cuotasPagadas y proximoPago (si avanzó capital)
       final sumarCuotas = (_modo == 'SOLO INTERÉS') ? 0 : _nCuotas;
       if (sumarCuotas > 0) {
+        final db = await DbService.instance.database;
+
         final nuevasCuotas = (p.cuotasPagadas + sumarCuotas) > p.cuotasTotales
             ? p.cuotasTotales
             : p.cuotasPagadas + sumarCuotas;
 
+        // Base para el avance del próximo vencimiento
         final base = (p.proximoPago != null && p.proximoPago!.isNotEmpty)
             ? (DateTime.tryParse(p.proximoPago!) ?? DateTime.now())
             : (DateTime.tryParse(p.fechaInicio ?? '') ?? DateTime.now());
@@ -244,7 +297,9 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pago registrado')),
       );
-      Navigator.pop(context, true);
+
+      // 🔄 Recargar para renumerar: quedarán 2, 3, 4, ...
+      await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -281,7 +336,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
                 )
               : _buildContent(),
 
-      // Barra inferior con Total y botones (estilo similar a tus capturas)
+      // Barra inferior con Total y botones
       bottomNavigationBar: _loading || _error != null
           ? null
           : SafeArea(
@@ -398,13 +453,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
                           .map(
                             (n) => DropdownMenuItem(
                               value: n,
-                              child: Text(
-                                n == 1
-                                    ? '1 Cuota (Pendiente)'
-                                    : (n == 2
-                                        ? '2 Cuotas (Pendiente)'
-                                        : '$n Cuotas'),
-                              ),
+                              child: Text(_labelCuota(n)), // ← "Cuota N"
                             ),
                           )
                           .toList(),

@@ -2,127 +2,183 @@
 
 import 'package:flutter/material.dart';
 
-// ----------------------------------------------------
-// --- Importaciones de Pantallas (Asegúrate de las rutas) ---
-// ----------------------------------------------------
+// --- Importaciones de Pantallas ---
+import '../screens/inicio_screen.dart';           // ⬅️ Import explícito a Inicio
 import '../screens/solicitudes_screen.dart';
 import '../screens/clientes_screen.dart';
 import '../screens/prestamos_screen.dart';
 import '../screens/pagos_screen.dart';
-import 'package:mi_app/screens/calculadora_screen.dart';
-
-//import '../screens/calculadora_screen.dart';
-//import '../screens/inicio_screen.dart'; 
-//import '../screens/login_screen.dart'; 
-
+import '../screens/calculadora_screen.dart';
 
 enum AppSection { inicio, solicitudes, clientes, prestamos, pagos, calculadora }
 
 class AppDrawer extends StatelessWidget {
+  /// Sección actual (para resaltar el item)
   final AppSection? current;
-  final Function(int)? onNavigateToHomeShellIndex; 
+
+  /// Callback opcional para HomeShell con tabs (0 = Inicio).
+  final Function(int)? onNavigateToHomeShellIndex;
 
   const AppDrawer({
-    super.key, 
+    super.key,
     this.current,
-    this.onNavigateToHomeShellIndex, 
+    this.onNavigateToHomeShellIndex,
   });
 
+  // Navegación a pantallas “secundarias” (push normal)
   void _navToSecondary(BuildContext context, Widget screen) {
-    Navigator.pop(context); 
-    Navigator.push(context, MaterialPageRoute(builder: (_) => screen)); 
+    Navigator.pop(context); // cierra el drawer
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
+  // Ir a Inicio:
+  // 1) Si hay HomeShell con tabs, usa el callback
+  // 2) Si no, navega explícitamente a InicioScreen limpiando el stack
+  void _goInicio(BuildContext context) {
+    Navigator.pop(context); // cierra el drawer primero
+
+    if (onNavigateToHomeShellIndex != null) {
+      Future.microtask(() => onNavigateToHomeShellIndex!(0));
+      return;
+    }
+
+    // Fallback directo a InicioScreen (NO usa rutas nombradas para evitar caer en '/login')
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const InicioScreen()),
+      (route) => false,
+    );
   }
 
   void _logout(BuildContext context) {
     Navigator.pop(context);
-    // Usamos pushNamedAndRemoveUntil asumiendo que tu ruta de login es '/login'
-    Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false); 
+    Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
   }
 
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
     return Drawer(
       child: SafeArea(
         child: ListView(
           children: [
-            // Encabezado
+            // Header
             Container(
-              height: 120, 
-              color: Theme.of(context).primaryColor, 
+              height: 120,
+              color: Theme.of(context).primaryColor,
               alignment: Alignment.centerLeft,
               padding: const EdgeInsets.only(left: 16, top: 24),
               child: const Text(
-                'Joel Wifi Dominicana', 
+                'Joel Wifi Dominicana',
                 style: TextStyle(
-                  fontSize: 18, 
-                  fontWeight: FontWeight.w600, 
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
                   color: Colors.white,
-                )
+                ),
               ),
             ),
-            
-            // --- ENLACES DE NAVEGACIÓN ---
-            
-            // 1. INICIO (Estadísticas)
+
+            // --- Navegación ---
             ListTile(
-              leading: const Icon(Icons.home), 
-              title: const Text('Inicio'), 
-              selected: current == AppSection.inicio, 
-              onTap: () {
-                Navigator.pop(context);
-                onNavigateToHomeShellIndex?.call(0);
-              }
+              leading: Icon(Icons.home_outlined,
+                  color: current == AppSection.inicio ? primary : null),
+              title: Text(
+                'Inicio',
+                style: TextStyle(
+                  fontWeight:
+                      current == AppSection.inicio ? FontWeight.w700 : FontWeight.w500,
+                  color: current == AppSection.inicio ? primary : null,
+                ),
+              ),
+              selected: current == AppSection.inicio,
+              onTap: () => _goInicio(context),
             ),
 
-            const Divider(), 
-            
-            // 2. SOLICITUDES
+            const Divider(),
+
             ListTile(
-              leading: const Icon(Icons.assignment_outlined), 
-              title: const Text('Solicitudes'), 
-              selected: current == AppSection.solicitudes, 
+              leading: Icon(Icons.assignment_outlined,
+                  color: current == AppSection.solicitudes ? primary : null),
+              title: Text(
+                'Solicitudes',
+                style: TextStyle(
+                  fontWeight: current == AppSection.solicitudes
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                  color: current == AppSection.solicitudes ? primary : null,
+                ),
+              ),
+              selected: current == AppSection.solicitudes,
               onTap: () => _navToSecondary(context, const SolicitudesScreen()),
             ),
-            
-            // 3. CLIENTES
+
             ListTile(
-              leading: const Icon(Icons.group_outlined), 
-              title: const Text('Clientes'), 
-              selected: current == AppSection.clientes, 
+              leading: Icon(Icons.group_outlined,
+                  color: current == AppSection.clientes ? primary : null),
+              title: Text(
+                'Clientes',
+                style: TextStyle(
+                  fontWeight:
+                      current == AppSection.clientes ? FontWeight.w700 : FontWeight.w500,
+                  color: current == AppSection.clientes ? primary : null,
+                ),
+              ),
+              selected: current == AppSection.clientes,
               onTap: () => _navToSecondary(context, const ClientesScreen()),
             ),
-            
-            // 4. PRÉSTAMOS
+
             ListTile(
-              leading: const Icon(Icons.request_page_outlined), 
-              title: const Text('Préstamos'), 
-              selected: current == AppSection.prestamos, 
+              leading: Icon(Icons.request_page_outlined,
+                  color: current == AppSection.prestamos ? primary : null),
+              title: Text(
+                'Préstamos',
+                style: TextStyle(
+                  fontWeight: current == AppSection.prestamos
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                  color: current == AppSection.prestamos ? primary : null,
+                ),
+              ),
+              selected: current == AppSection.prestamos,
               onTap: () => _navToSecondary(context, const PrestamosScreen()),
             ),
-            
-            // 5. PAGOS (CxC)
+
             ListTile(
-              leading: const Icon(Icons.payments_outlined), 
-              title: const Text('Pagos'), 
-              selected: current == AppSection.pagos, 
+              leading: Icon(Icons.payments_outlined,
+                  color: current == AppSection.pagos ? primary : null),
+              title: Text(
+                'Pagos',
+                style: TextStyle(
+                  fontWeight:
+                      current == AppSection.pagos ? FontWeight.w700 : FontWeight.w500,
+                  color: current == AppSection.pagos ? primary : null,
+                ),
+              ),
+              selected: current == AppSection.pagos,
               onTap: () => _navToSecondary(context, const PagosScreen()),
             ),
-            
-            // 6. CALCULADORA
+
             ListTile(
-              leading: const Icon(Icons.calculate_outlined), 
-              title: const Text('Calculadora'), 
-              selected: current == AppSection.calculadora, 
+              leading: Icon(Icons.calculate_outlined,
+                  color: current == AppSection.calculadora ? primary : null),
+              title: Text(
+                'Calculadora',
+                style: TextStyle(
+                  fontWeight: current == AppSection.calculadora
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                  color: current == AppSection.calculadora ? primary : null,
+                ),
+              ),
+              selected: current == AppSection.calculadora,
               onTap: () => _navToSecondary(context, const CalculadoraScreen()),
             ),
-            
+
             const Divider(),
-            
-            // CERRAR SESIÓN
+
             ListTile(
-              leading: const Icon(Icons.logout), 
-              title: const Text('Cerrar sesión'), 
-              onTap: () => _logout(context)
+              leading: const Icon(Icons.logout),
+              title: const Text('Cerrar sesión'),
+              onTap: () => _logout(context),
             ),
           ],
         ),

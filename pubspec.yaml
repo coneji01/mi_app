@@ -15,11 +15,12 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  # SQLite base + FFI (desktop) + FFI-web (web)
+  # SQLite
   sqflite: ^2.3.3
-  sqflite_common_ffi: ^2.3.2
-  sqflite_common_ffi_web: ^0.4.4+5
-  sqlite3_flutter_libs: ^0.5.0   # libs nativas para Windows/macOS/Linux
+  sqflite_common: ^2.5.0         # ← NECESARIO para databaseFactory
+  sqflite_common_ffi: ^2.3.2     # Desktop (Windows/macOS/Linux)
+  sqflite_common_ffi_web: ^0.4.4+5  # Web
+  sqlite3_flutter_libs: ^0.5.0   # libs nativas para desktop
 
   # Utilidades
   path: ^1.9.0
@@ -36,4 +37,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-

@@ -39,12 +39,10 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
         _page = 0;
       });
 
-      // Debug: muestra llaves y primer registro
+      // Debug opcional
       if (_all.isNotEmpty) {
-        debugPrint('🔑 Llaves disponibles: ${_all.first.keys.toList()}');
-        debugPrint('🧪 Primer registro: ${_all.first}');
-      } else {
-        debugPrint('ℹ️ listarPrestamosConCliente() devolvió 0 filas');
+        debugPrint('🔑 Llaves: ${_all.first.keys.toList()}');
+        debugPrint('🧪 Row0: ${_all.first}');
       }
     } catch (e) {
       if (!mounted) return;
@@ -94,8 +92,16 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
     return null;
   }
 
+  // Balance con respaldo: balancePendiente -> balance_pendiente -> balanceCalculado
+  double _balance(Map<String, dynamic> r) {
+    return (_get<num>(r, ['balancePendiente', 'balance_pendiente'])
+              ?? _get<num>(r, ['balanceCalculado'])
+              ?? 0)
+        .toDouble();
+  }
+
   ({String label, Color color, String? extra}) _estadoPrestamo(Map<String, dynamic> r) {
-    final balance = (_get<num>(r, ['balancePendiente', 'balance_pendiente']) ?? 0).toDouble();
+    final balance = _balance(r);
     final modalidad = (_get<String>(r, ['modalidad']) ?? '').toLowerCase();
     final cuotasTot = _get<int>(r, ['cuotasTotales', 'cuotas_totales']) ?? 0;
     final cuotasPag = _get<int>(r, ['cuotasPagadas', 'cuotas_pagadas']) ?? 0;
@@ -129,7 +135,7 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
     }
 
     if (vencidas != null) {
-      return (label: 'Vencida', color: Colors.red, extra: 'Cuotas Vencida: $vencidas');
+      return (label: 'Vencida', color: Colors.red, extra: 'Cuotas vencidas: $vencidas');
     }
     return (label: 'Pendiente', color: Theme.of(context).colorScheme.primary, extra: null);
   }
@@ -171,7 +177,7 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
     final modalidad  = _get<String>(r, ['modalidad']) ?? '—';
     final cuotasTot  = _get<int>(r, ['cuotasTotales', 'cuotas_totales']) ?? 0;
     final cuotasPag  = _get<int>(r, ['cuotasPagadas', 'cuotas_pagadas']) ?? 0;
-    final balance    = _get<num>(r, ['balancePendiente', 'balance_pendiente']) ?? 0;
+    final balance    = _balance(r);
     final proximo    = _fmtFecha(_get<String>(r, ['proximoPago', 'proximo_pago']));
 
     final est = _estadoPrestamo(r);
@@ -245,7 +251,7 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
                       Align(
                         alignment: Alignment.centerRight,
                         child: Text(
-                          _money(balance), // si quieres cuota/total, avisa y lo cambio
+                          _money(balance),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleLarge?.copyWith(

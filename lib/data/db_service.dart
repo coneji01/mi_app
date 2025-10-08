@@ -4,7 +4,7 @@ import 'package:path/path.dart';
 
 import '../models/cliente.dart';
 import '../models/prestamo.dart';
-import '../models/pago_vista.dart'; // ← DTO para la pantalla de Pagos
+import '../models/pago_vista.dart'; // DTO para la pantalla de Pagos
 
 class DbService {
   // ────────────────── Singleton ──────────────────
@@ -13,14 +13,12 @@ class DbService {
 
   static Database? _database;
 
-  /// Getter interno usado por los métodos del servicio.
   Future<Database> get _db async {
     if (_database != null) return _database!;
     _database = await _initDb();
     return _database!;
   }
 
-  /// Getter público para otros servicios (p.ej. PagosService)
   Future<Database> get database async => await _db;
 
   // ────────────────── Inicialización ──────────────────
@@ -28,12 +26,11 @@ class DbService {
     final path = join(await getDatabasesPath(), 'mi_app.db');
     return openDatabase(
       path,
-      version: 3, // ⬅️ subimos versión para aplicar migración
+      version: 4, // ⬅️ subimos a v4 para asegurar el índice UNIQUE de cédula
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
       onCreate: (db, version) async {
-        // Esquema laxo (permite NULL) en clientes (snake_case)
         await db.execute('''
           CREATE TABLE clientes (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,13 +39,15 @@ class DbService {
             telefono   TEXT,
             direccion  TEXT,
             cedula     TEXT,
-            sexo       TEXT,   -- 'M' | 'F' | 'O'
-            creado_en  TEXT,   -- ISO-8601
+            sexo       TEXT,
+            creado_en  TEXT,
             foto_path  TEXT
           );
         ''');
 
-        // prestamos/pagos en camelCase, como usa tu código
+        // Índice único por cédula (permite múltiples NULL)
+        await _ensureCedulaUniqueIndex(db);
+
         await db.execute('''
           CREATE TABLE prestamos (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,11 +57,11 @@ class DbService {
             totalAPagar       REAL    NOT NULL,
             cuotasTotales     INTEGER NOT NULL,
             cuotasPagadas     INTEGER NOT NULL,
-            interes           REAL    NOT NULL,  -- % por periodo
+            interes           REAL    NOT NULL,
             modalidad         TEXT    NOT NULL,
             tipoAmortizacion  TEXT    NOT NULL,
-            fechaInicio       TEXT    NOT NULL,  -- ISO-8601
-            proximoPago       TEXT,              -- ISO-8601
+            fechaInicio       TEXT    NOT NULL,
+            proximoPago       TEXT,
             FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
           );
         ''');
@@ -72,14 +71,13 @@ class DbService {
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             prestamoId INTEGER NOT NULL,
             monto      REAL    NOT NULL,
-            fecha      TEXT    NOT NULL,   -- ISO-8601
+            fecha      TEXT    NOT NULL,
             nota       TEXT,
             FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
           );
         ''');
       },
       onUpgrade: (db, oldV, newV) async {
-        // v2 ya recreaba "clientes" a snake_case
         if (oldV < 2) {
           await db.execute('DROP TABLE IF EXISTS clientes;');
           await db.execute('''
@@ -97,7 +95,6 @@ class DbService {
           ''');
         }
 
-        // v3: asegurar columnas camelCase en prestamos/pagos (clienteId, prestamoId)
         if (oldV < 3) {
           await db.execute('DROP TABLE IF EXISTS pagos;');
           await db.execute('DROP TABLE IF EXISTS prestamos;');
@@ -131,20 +128,46 @@ class DbService {
             );
           ''');
         }
+
+        // v4: asegurar índice UNIQUE de cédula
+        if (oldV < 4) {
+          await _ensureCedulaUniqueIndex(db);
+        }
       },
+    );
+  }
+
+  /// Crea el índice único en cédula (solo impone unicidad cuando no es NULL).
+  Future<void> _ensureCedulaUniqueIndex(Database db) async {
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_clientes_cedula '
+      'ON clientes(cedula) WHERE cedula IS NOT NULL;',
     );
   }
 
   // ────────────────── Utilidades ──────────────────
 
-  /// Normaliza cédula: deja solo dígitos; null si queda vacía.
+  /// Normaliza cédula: solo dígitos; si queda vacía -> null.
   static String? normalizeCedula(String? raw) {
     if (raw == null) return null;
     final d = raw.replaceAll(RegExp(r'\D'), '');
     return d.isEmpty ? null : d;
   }
 
-  /// Borra contenido de las tablas (útil en pruebas).
+  Future<bool> _cedulaExiste(String cedula, {int? excludeId}) async {
+    final db = await _db;
+    final rows = await db.query(
+      'clientes',
+      columns: const ['id'],
+      where: excludeId == null
+          ? 'cedula = ?'
+          : 'cedula = ? AND id <> ?',
+      whereArgs: excludeId == null ? [cedula] : [cedula, excludeId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<void> nuke() async {
     final db = await _db;
     await db.delete('pagos');
@@ -152,23 +175,28 @@ class DbService {
     await db.delete('clientes');
   }
 
-  // ────────────────── CLIENTES ──────────────────
-
-  /// Convierte '' -> null para guardar "vacío" como NULL
   String? _n(String? s) => (s == null || s.trim().isEmpty) ? null : s.trim();
+
+  // ────────────────── CLIENTES ──────────────────
 
   Future<int> insertCliente(Cliente c) async {
     final db = await _db;
+
+    final ced = normalizeCedula(c.cedula); // ⬅️ normalizamos
+    if (ced != null && await _cedulaExiste(ced)) {
+      // Mensaje claro para la UI
+      throw Exception('La cédula $ced ya está registrada en otro cliente.');
+    }
 
     final data = <String, Object?>{
       'nombre'    : _n(c.nombre),
       'apellido'  : _n(c.apellido),
       'telefono'  : _n(c.telefono),
       'direccion' : _n(c.direccion),
-      'cedula'    : _n(c.cedula),
-      'sexo'      : SexoCodec.toDb(c.sexo), // 'M','F','O' o null
-      'creado_en' : _n(c.creadoEn),         // snake_case
-      'foto_path' : _n(c.fotoPath),         // snake_case
+      'cedula'    : ced,                  // ⬅️ guardamos normalizada o NULL
+      'sexo'      : SexoCodec.toDb(c.sexo),
+      'creado_en' : _n(c.creadoEn),
+      'foto_path' : _n(c.fotoPath),
     };
 
     return db.insert('clientes', data, conflictAlgorithm: ConflictAlgorithm.abort);
@@ -180,12 +208,17 @@ class DbService {
       throw ArgumentError('Cliente.id es requerido para actualizar');
     }
 
+    final ced = normalizeCedula(c.cedula);
+    if (ced != null && await _cedulaExiste(ced, excludeId: c.id)) {
+      throw Exception('La cédula $ced ya está registrada en otro cliente.');
+    }
+
     final data = <String, Object?>{
       'nombre'    : _n(c.nombre),
       'apellido'  : _n(c.apellido),
       'telefono'  : _n(c.telefono),
       'direccion' : _n(c.direccion),
-      'cedula'    : _n(c.cedula),
+      'cedula'    : ced,
       'sexo'      : SexoCodec.toDb(c.sexo),
       'creado_en' : _n(c.creadoEn),
       'foto_path' : _n(c.fotoPath),
@@ -200,7 +233,6 @@ class DbService {
     );
   }
 
-  /// Lista clientes (con filtro opcional por nombre/apellido/teléfono).
   Future<List<Cliente>> getClientes({
     String? filtro,
     int? limit,
@@ -231,7 +263,6 @@ class DbService {
     return rows.map((m) => Cliente.fromMap(m)).toList();
   }
 
-  /// Obtiene un cliente por ID.
   Future<Cliente?> getClienteById(int id) async {
     final db = await _db;
     final rows = await db.query(
@@ -246,7 +277,6 @@ class DbService {
 
   // ────────────────── PRÉSTAMOS ──────────────────
 
-  /// Inserta un préstamo y devuelve el id.
   Future<int> crearPrestamo(Prestamo p) async {
     final db = await _db;
     final data = <String, Object?>{
@@ -277,7 +307,6 @@ class DbService {
     return Prestamo.fromMap(rows.first);
   }
 
-  /// Préstamos + datos del cliente (para listados).
   Future<List<Map<String, dynamic>>> listarPrestamosConCliente() async {
     final db = await _db;
     const sql = '''
@@ -296,7 +325,15 @@ class DbService {
         p.modalidad,
         p.tipoAmortizacion,
         p.fechaInicio,
-        p.proximoPago
+        p.proximoPago,
+
+        max(0, p.monto - ifnull((
+          SELECT SUM(pg.monto)
+            FROM pagos pg
+           WHERE pg.prestamoId = p.id
+             AND (pg.nota LIKE '[capital]%' OR pg.nota LIKE '[CAPITAL]%')
+        ), 0)) AS balanceCalculado
+
       FROM prestamos p
       LEFT JOIN clientes c ON c.id = p.clienteId
       ORDER BY p.id DESC
@@ -306,8 +343,6 @@ class DbService {
 
   // ────────────────── PAGOS ──────────────────
 
-  /// Inserta un pago y, si `tipo == 'capital'`, reduce el balancePendiente.
-  /// NOTA: `tipo` se guarda como etiqueta dentro de `nota` -> "[tipo] ...".
   Future<void> agregarPagoRapido({
     required int prestamoId,
     required double monto,
@@ -317,12 +352,11 @@ class DbService {
     final db = await _db;
     final ahoraIso = DateTime.now().toIso8601String();
 
-    final notaFinal = (tipo == null || tipo.isEmpty)
-        ? nota
-        : (nota == null || nota.isEmpty ? '[$tipo]' : '[$tipo] $nota');
+    final tag = (tipo ?? '').trim().toLowerCase();
+    final notaFinal =
+        tag.isEmpty ? nota : (nota == null || nota.isEmpty ? '[$tag]' : '[$tag] $nota');
 
     await db.transaction((txn) async {
-      // 1) Insertar pago
       await txn.insert('pagos', {
         'prestamoId': prestamoId,
         'monto': monto,
@@ -330,30 +364,43 @@ class DbService {
         'nota': notaFinal,
       });
 
-      // 2) Si es capital, actualizar balance del préstamo
-      if ((tipo ?? '').toLowerCase() == 'capital') {
-        final rows = await txn.query(
+      if (tag == 'capital') {
+        final pr = await txn.query(
           'prestamos',
-          columns: ['balancePendiente'],
+          columns: ['balancePendiente', 'cuotasTotales', 'cuotasPagadas'],
           where: 'id = ?',
           whereArgs: [prestamoId],
           limit: 1,
         );
-        if (rows.isNotEmpty) {
-          final bal = (rows.first['balancePendiente'] as num?)?.toDouble() ?? 0.0;
-          final nuevo = bal - monto;
-          await txn.update(
-            'prestamos',
-            {'balancePendiente': (nuevo < 0 ? 0.0 : nuevo)},
-            where: 'id = ?',
-            whereArgs: [prestamoId],
-          );
+        if (pr.isNotEmpty) {
+          final oldBal = (pr.first['balancePendiente'] as num?)?.toDouble() ?? 0.0;
+          final cuotasTot = (pr.first['cuotasTotales'] as num).toInt();
+          final newBal = (oldBal - monto) <= 0 ? 0.0 : (oldBal - monto);
+
+          if (newBal == 0.0) {
+            await txn.update(
+              'prestamos',
+              {
+                'balancePendiente': 0.0,
+                'cuotasPagadas': cuotasTot,
+                'proximoPago': null,
+              },
+              where: 'id = ?',
+              whereArgs: [prestamoId],
+            );
+          } else {
+            await txn.update(
+              'prestamos',
+              {'balancePendiente': newBal},
+              where: 'id = ?',
+              whereArgs: [prestamoId],
+            );
+          }
         }
       }
     });
   }
 
-  /// Lista pagos de un préstamo (más recientes primero).
   Future<List<Map<String, dynamic>>> listarPagosDePrestamo(int prestamoId) async {
     final db = await _db;
     return db.query(
@@ -364,12 +411,9 @@ class DbService {
     );
   }
 
-  // ============ NUEVO: registrar pago de cuota ============
-  /// Registra un pago desglosado (capital/interés/mora/otros) y
-  /// actualiza: balance, cuotasPagadas y proximoPago.
   Future<void> registrarPagoCuota({
     required int prestamoId,
-    required int numeroCuota, // 1..N (informativo por ahora)
+    required int numeroCuota,
     double capital = 0,
     double interes = 0,
     double mora = 0,
@@ -380,7 +424,6 @@ class DbService {
     final ahoraIso = DateTime.now().toIso8601String();
 
     await db.transaction((txn) async {
-      // 1) Traer préstamo actual
       final prRows = await txn.query(
         'prestamos',
         where: 'id = ?',
@@ -398,7 +441,6 @@ class DbService {
       final String? fechaInicioIso = pr['fechaInicio'] as String?;
       final String? proximoPagoIso = pr['proximoPago'] as String?;
 
-      // 2) Insertar renglones de pagos (uno por concepto > 0)
       Future<void> _ins(double monto, String tag) async {
         if (monto <= 0) return;
         await txn.insert('pagos', {
@@ -409,45 +451,43 @@ class DbService {
         });
       }
 
-      await _ins(capital,  'capital');
-      await _ins(interes,  'interes');
-      await _ins(mora,     'mora');
-      await _ins(otros,    'otros');
+      await _ins(capital, 'capital');
+      await _ins(interes, 'interes');
+      await _ins(mora, 'mora');
+      await _ins(otros, 'otros');
 
-      // 3) Recalcular balance (solo capital reduce)
       final nuevoBalance = balance - capital;
       final balanceFinal = nuevoBalance < 0 ? 0.0 : nuevoBalance;
 
-      // 4) Avanzar una cuota (tope N)
-      final nuevasCuotasPagadas =
-          (cuotasPagadas + 1) > cuotasTotales ? cuotasTotales : (cuotasPagadas + 1);
+      int nuevasCuotasPagadas;
+      String? nuevoProximoPago;
+      if (balanceFinal == 0.0) {
+        nuevasCuotasPagadas = cuotasTotales;
+        nuevoProximoPago = null;
+      } else {
+        nuevasCuotasPagadas =
+            (cuotasPagadas + 1) > cuotasTotales ? cuotasTotales : (cuotasPagadas + 1);
 
-      // 5) Calcular próximo pago según modalidad
-      String? calcProx(String? baseIso) {
         DateTime base;
-        if (baseIso != null) {
-          base = DateTime.tryParse(baseIso) ?? DateTime.now();
+        if (proximoPagoIso != null) {
+          base = DateTime.tryParse(proximoPagoIso) ?? DateTime.now();
         } else if (fechaInicioIso != null) {
           base = DateTime.tryParse(fechaInicioIso) ?? DateTime.now();
         } else {
           base = DateTime.now();
         }
-        final low = modalidad.toLowerCase();
         Duration paso;
+        final low = modalidad.toLowerCase();
         if (low.contains('seman')) {
           paso = const Duration(days: 7);
         } else if (low.contains('mens')) {
           paso = const Duration(days: 30);
         } else {
-          paso = const Duration(days: 14); // quincenal
+          paso = const Duration(days: 14);
         }
-        return base.add(paso).toIso8601String();
+        nuevoProximoPago = base.add(paso).toIso8601String();
       }
 
-      final nuevoProximoPago =
-          (nuevasCuotasPagadas >= cuotasTotales) ? null : calcProx(proximoPagoIso);
-
-      // 6) Actualizar préstamo
       await txn.update(
         'prestamos',
         {
@@ -461,8 +501,7 @@ class DbService {
     });
   }
 
-  // ============ NUEVO: Pagos con nombre de cliente ============
-  /// Devuelve pagos + nombre de cliente (para la pantalla Pagos).
+  // ============ Pagos con nombre de cliente ============
   Future<List<PagoVista>> listarPagosConCliente({int? limit}) async {
     final db = await _db;
     final lim = (limit != null && limit > 0) ? ' LIMIT $limit' : '';
@@ -485,5 +524,175 @@ class DbService {
 
     return rows.map((m) => PagoVista.fromMap(m)).toList();
   }
-}
 
+  // ────────────────── Estadísticas para INICIO ──────────────────
+
+  Duration _pasoPorModalidad(String modalidad) {
+    final low = modalidad.toLowerCase();
+    if (low.contains('seman')) return const Duration(days: 7);
+    if (low.contains('mens')) return const Duration(days: 30);
+    return const Duration(days: 14);
+  }
+
+  String _notaTag(String? nota) {
+    if (nota == null) return 'otros';
+    final m = RegExp(r'^\s*\[([^\]]+)\]').firstMatch(nota);
+    return (m?.group(1) ?? 'otros').toLowerCase();
+  }
+
+  Future<({int activos, int total})> conteoClientesActivosYTotal() async {
+    final db = await _db;
+    final total = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM clientes'),
+        ) ?? 0;
+
+    final activos = Sqflite.firstIntValue(await db.rawQuery('''
+      SELECT COUNT(DISTINCT clienteId)
+      FROM prestamos
+      WHERE balancePendiente > 0
+    ''')) ?? 0;
+
+    return (activos: activos, total: total);
+  }
+
+  Future<({int activos, int totalPrestamo, int totalClientes})>
+      conteoClientesActivosDetalle() async {
+    final db = await _db;
+
+    final totalClientes = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM clientes'),
+        ) ?? 0;
+
+    final totalPrestamo = Sqflite.firstIntValue(await db.rawQuery('''
+      SELECT COUNT(DISTINCT clienteId) FROM prestamos
+    ''')) ?? 0;
+
+    final activos = Sqflite.firstIntValue(await db.rawQuery('''
+      SELECT COUNT(DISTINCT clienteId)
+      FROM prestamos
+      WHERE balancePendiente > 0
+    ''')) ?? 0;
+
+    return (activos: activos, totalPrestamo: totalPrestamo, totalClientes: totalClientes);
+  }
+
+  Future<({int activos, int total})> conteoPrestamosActivosYTotal() async {
+    final db = await _db;
+    final total = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM prestamos'),
+        ) ?? 0;
+    final activos = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM prestamos WHERE balancePendiente > 0'),
+        ) ?? 0;
+    return (activos: activos, total: total);
+  }
+
+  Future<double> totalPrestado() async {
+    final db = await _db;
+    final rows = await db.rawQuery('SELECT IFNULL(SUM(monto),0) AS s FROM prestamos');
+    return (rows.first['s'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  Future<double> proyeccionInteresMes(int year, int month) async {
+    final db = await _db;
+    final rows = await db.rawQuery('''
+      SELECT id, monto, interes, modalidad, fechaInicio, cuotasTotales
+      FROM prestamos
+    ''');
+
+    double total = 0.0;
+    for (final r in rows) {
+      final double monto = (r['monto'] as num).toDouble();
+      final double interes = (r['interes'] as num).toDouble();
+      final String modalidad = (r['modalidad'] as String?) ?? 'Quincenal';
+      final int cuotasTotales = (r['cuotasTotales'] as num).toInt();
+      final DateTime? inicio = DateTime.tryParse((r['fechaInicio'] as String?) ?? '');
+      if (inicio == null || cuotasTotales <= 0) continue;
+
+      final paso = _pasoPorModalidad(modalidad);
+      final interesPorCuota = monto * (interes / 100.0);
+
+      for (int k = 1; k <= cuotasTotales; k++) {
+        final due = inicio.add(Duration(days: paso.inDays * k));
+        if (due.year == year && due.month == month) {
+          total += interesPorCuota;
+        }
+      }
+    }
+    return total;
+  }
+
+  Future<Map<int, Map<String, double>>> resumenPagosPorMesDelAnio(int year) async {
+    final db = await _db;
+    final desde = DateTime(year, 1, 1).toIso8601String();
+    final hasta = DateTime(year + 1, 1, 1).toIso8601String();
+
+    final rows = await db.query(
+      'pagos',
+      columns: ['fecha', 'monto', 'nota'],
+      where: 'fecha >= ? AND fecha < ?',
+      whereArgs: [desde, hasta],
+      orderBy: 'fecha ASC',
+    );
+
+    final Map<int, Map<String, double>> out = {
+      for (var m = 1; m <= 12; m++)
+        m: {
+          'capital': 0,
+          'interes': 0,
+          'mora': 0,
+          'seguro': 0,
+          'otros': 0,
+          'gastos': 0,
+        }
+    };
+
+    for (final r in rows) {
+      final d = DateTime.tryParse((r['fecha'] as String?) ?? '');
+      if (d == null) continue;
+      final m = d.month;
+      final monto = (r['monto'] as num?)?.toDouble() ?? 0.0;
+      final tag = _notaTag(r['nota'] as String?);
+
+      if (out[m]!.containsKey(tag)) {
+        out[m]![tag] = (out[m]![tag] ?? 0) + monto;
+      } else {
+        out[m]!['otros'] = (out[m]!['otros'] ?? 0) + monto;
+      }
+    }
+    return out;
+  }
+
+  Future<({double ingreso, double egreso})> ingresoEgresoMes(int year, int month) async {
+    final db = await _db;
+    final desde = DateTime(year, month, 1);
+    final hasta = DateTime(year, month + 1, 1);
+    final rows = await db.query(
+      'pagos',
+      columns: ['fecha', 'monto', 'nota'],
+      where: 'fecha >= ? AND fecha < ?',
+      whereArgs: [desde.toIso8601String(), hasta.toIso8601String()],
+    );
+
+    double ingreso = 0, egreso = 0;
+    for (final r in rows) {
+      final monto = (r['monto'] as num?)?.toDouble() ?? 0.0;
+      final tag = _notaTag(r['nota'] as String?);
+      switch (tag) {
+        case 'capital':
+        case 'interes':
+        case 'mora':
+        case 'otros':
+          ingreso += monto;
+          break;
+        case 'seguro':
+        case 'gastos':
+          egreso += monto;
+          break;
+        default:
+          ingreso += monto;
+      }
+    }
+    return (ingreso: ingreso, egreso: egreso);
+  }
+}
