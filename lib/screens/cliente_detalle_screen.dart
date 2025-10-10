@@ -127,10 +127,12 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final tieneFoto =
-        _cliente.fotoPath != null &&
+    final tieneFoto = (_cliente.fotoPath != null &&
         _cliente.fotoPath!.isNotEmpty &&
-        File(_cliente.fotoPath!).existsSync();
+        File(_cliente.fotoPath!).existsSync());
+
+    final nombreCompleto =
+        '${_cliente.nombre ?? ''} ${_cliente.apellido ?? ''}'.trim();
 
     return PopScope(
       canPop: false,
@@ -199,7 +201,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    '${_cliente.nombre} ${_cliente.apellido}'.trim(),
+                    nombreCompleto.isEmpty ? 'Cliente sin nombre' : nombreCompleto,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -217,7 +219,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             const Divider(),
             ListTile(
               leading: const Icon(Icons.calendar_today),
-              title: Text(_cliente.creadoEn),
+              title: Text(_cliente.creadoEn ?? '—'), // <- null-safe
               subtitle: const Text('Creado en (ISO-8601)'),
             ),
           ],

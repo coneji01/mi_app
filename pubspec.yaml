@@ -17,10 +17,10 @@ dependencies:
 
   # SQLite
   sqflite: ^2.3.3
-  sqflite_common: ^2.5.0         # ← NECESARIO para databaseFactory
-  sqflite_common_ffi: ^2.3.2     # Desktop (Windows/macOS/Linux)
-  sqflite_common_ffi_web: ^0.4.4+5  # Web
-  sqlite3_flutter_libs: ^0.5.0   # libs nativas para desktop
+  sqflite_common: ^2.5.0            # necesario para databaseFactory
+  sqflite_common_ffi: ^2.3.2        # desktop (Windows/macOS/Linux)
+  sqflite_common_ffi_web: ^0.4.4+5  # web
+  sqlite3_flutter_libs: ^0.5.0      # libs nativas para desktop
 
   # Utilidades
   path: ^1.9.0
@@ -29,6 +29,9 @@ dependencies:
   share_plus: ^12.0.0
   fl_chart: ^1.1.1
   intl: ^0.20.2
+  url_launcher: ^6.3.0
+  font_awesome_flutter: ^10.7.0   # íconos (WhatsApp etc.)
+  shared_preferences: ^2.2.3      # ✅ Preferencias locales
 
 dev_dependencies:
   flutter_test:

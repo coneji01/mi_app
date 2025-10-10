@@ -1,10 +1,13 @@
 // lib/data/db_service.dart
+import 'dart:math';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
 import '../models/cliente.dart';
 import '../models/prestamo.dart';
 import '../models/pago_vista.dart'; // DTO para la pantalla de Pagos
+import '../models/solicitud.dart';  // DTO para solicitudes (link de formulario)
 
 class DbService {
   // ────────────────── Singleton ──────────────────
@@ -21,33 +24,48 @@ class DbService {
 
   Future<Database> get database async => await _db;
 
+  // URL base del formulario web de solicitud (reemplaza por la tuya)
+  static const String kSolicitudUrlBase =
+      'https://tu-dominio.com/formulario-solicitud'; // TODO: cambia esta URL
+
   // ────────────────── Inicialización ──────────────────
   Future<Database> _initDb() async {
     final path = join(await getDatabasesPath(), 'mi_app.db');
     return openDatabase(
       path,
-      version: 4, // ⬅️ subimos a v4 para asegurar el índice UNIQUE de cédula
+      version: 6, // ⬅️ v6 agrega columnas laborales en clientes
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
       onCreate: (db, version) async {
+        // CLIENTES (con campos laborales)
         await db.execute('''
           CREATE TABLE clientes (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre     TEXT,
-            apellido   TEXT,
-            telefono   TEXT,
-            direccion  TEXT,
-            cedula     TEXT,
-            sexo       TEXT,
-            creado_en  TEXT,
-            foto_path  TEXT
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre             TEXT,
+            apellido           TEXT,
+            telefono           TEXT,
+            direccion          TEXT,
+            cedula             TEXT,
+            sexo               TEXT,
+            creado_en          TEXT,
+            foto_path          TEXT,
+
+            -- 👇 Campos laborales
+            empresa            TEXT,
+            ingresos           REAL,
+            estado_civil       TEXT,
+            dependientes       INTEGER,
+            direccion_trabajo  TEXT,
+            puesto_trabajo     TEXT,
+            meses_trabajando   INTEGER
           );
         ''');
 
         // Índice único por cédula (permite múltiples NULL)
         await _ensureCedulaUniqueIndex(db);
 
+        // PRESTAMOS
         await db.execute('''
           CREATE TABLE prestamos (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +84,7 @@ class DbService {
           );
         ''');
 
+        // PAGOS
         await db.execute('''
           CREATE TABLE pagos (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,8 +95,22 @@ class DbService {
             FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
           );
         ''');
+
+        // SOLICITUDES
+        await db.execute('''
+          CREATE TABLE solicitudes (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            leadId        TEXT    NOT NULL UNIQUE,
+            nombre        TEXT,
+            telefono      TEXT,
+            estado        TEXT    NOT NULL DEFAULT 'enviada',
+            urlFormulario TEXT    NOT NULL,
+            creadoEn      TEXT    NOT NULL
+          );
+        ''');
       },
       onUpgrade: (db, oldV, newV) async {
+        // v2: recrea clientes (histórico de tu proyecto)
         if (oldV < 2) {
           await db.execute('DROP TABLE IF EXISTS clientes;');
           await db.execute('''
@@ -95,6 +128,7 @@ class DbService {
           ''');
         }
 
+        // v3: recrea pagos y prestamos (histórico)
         if (oldV < 3) {
           await db.execute('DROP TABLE IF EXISTS pagos;');
           await db.execute('DROP TABLE IF EXISTS prestamos;');
@@ -133,6 +167,36 @@ class DbService {
         if (oldV < 4) {
           await _ensureCedulaUniqueIndex(db);
         }
+
+        // v5: tabla solicitudes
+        if (oldV < 5) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS solicitudes (
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              leadId        TEXT    NOT NULL UNIQUE,
+              nombre        TEXT,
+              telefono      TEXT,
+              estado        TEXT    NOT NULL DEFAULT 'enviada',
+              urlFormulario TEXT    NOT NULL,
+              creadoEn      TEXT    NOT NULL
+            );
+          ''');
+        }
+
+        // v6: agregar columnas laborales a clientes
+        if (oldV < 6) {
+          Future<void> _try(String sql) async {
+            try { await db.execute(sql); } catch (_) {}
+          }
+
+          await _try('ALTER TABLE clientes ADD COLUMN empresa TEXT');
+          await _try('ALTER TABLE clientes ADD COLUMN ingresos REAL');
+          await _try('ALTER TABLE clientes ADD COLUMN estado_civil TEXT');
+          await _try('ALTER TABLE clientes ADD COLUMN dependientes INTEGER');
+          await _try('ALTER TABLE clientes ADD COLUMN direccion_trabajo TEXT');
+          await _try('ALTER TABLE clientes ADD COLUMN puesto_trabajo TEXT');
+          await _try('ALTER TABLE clientes ADD COLUMN meses_trabajando INTEGER');
+        }
       },
     );
   }
@@ -159,44 +223,68 @@ class DbService {
     final rows = await db.query(
       'clientes',
       columns: const ['id'],
-      where: excludeId == null
-          ? 'cedula = ?'
-          : 'cedula = ? AND id <> ?',
+      where: excludeId == null ? 'cedula = ?' : 'cedula = ? AND id <> ?',
       whereArgs: excludeId == null ? [cedula] : [cedula, excludeId],
       limit: 1,
     );
     return rows.isNotEmpty;
   }
 
+  String? _n(String? s) => (s == null || s.trim().isEmpty) ? null : s.trim();
+
+  // Genera un leadId único y el link del formulario
+  String _nuevoLeadId() {
+    final rnd = Random();
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final salt = rnd.nextInt(9000) + 1000;
+    return 'L$now$salt';
+  }
+
+  String _linkDeSolicitud(String leadId) {
+    final uri = Uri.parse(kSolicitudUrlBase).replace(queryParameters: {'lead': leadId});
+    return uri.toString();
+  }
+
+  // ────────────────── Herramientas de mantenimiento ──────────────────
   Future<void> nuke() async {
     final db = await _db;
     await db.delete('pagos');
     await db.delete('prestamos');
     await db.delete('clientes');
+    await db.delete('solicitudes');
   }
-
-  String? _n(String? s) => (s == null || s.trim().isEmpty) ? null : s.trim();
 
   // ────────────────── CLIENTES ──────────────────
 
   Future<int> insertCliente(Cliente c) async {
     final db = await _db;
 
-    final ced = normalizeCedula(c.cedula); // ⬅️ normalizamos
+    final ced = normalizeCedula(c.cedula);
     if (ced != null && await _cedulaExiste(ced)) {
-      // Mensaje claro para la UI
       throw Exception('La cédula $ced ya está registrada en otro cliente.');
     }
 
     final data = <String, Object?>{
-      'nombre'    : _n(c.nombre),
-      'apellido'  : _n(c.apellido),
-      'telefono'  : _n(c.telefono),
-      'direccion' : _n(c.direccion),
-      'cedula'    : ced,                  // ⬅️ guardamos normalizada o NULL
-      'sexo'      : SexoCodec.toDb(c.sexo),
-      'creado_en' : _n(c.creadoEn),
-      'foto_path' : _n(c.fotoPath),
+      // Personales
+      'nombre': _n(c.nombre),
+      'apellido': _n(c.apellido),
+      'telefono': _n(c.telefono),
+      'direccion': _n(c.direccion),
+      'cedula': ced,
+      'sexo': c.sexo == null ? null : SexoCodec.encode(c.sexo), // ← null-safe
+      'creado_en': _n(c.creadoEn),
+      'foto_path': _n(c.fotoPath),
+
+      // Laborales
+      'empresa': _n(c.empresa),
+      'ingresos': c.ingresos,
+      'estado_civil': c.estadoCivil == null
+          ? null
+          : EstadoCivilCodec.encode(c.estadoCivil),           // ← null-safe (sin !)
+      'dependientes': c.dependientes,
+      'direccion_trabajo': _n(c.direccionTrabajo),
+      'puesto_trabajo': _n(c.puestoTrabajo),
+      'meses_trabajando': c.mesesTrabajando,
     };
 
     return db.insert('clientes', data, conflictAlgorithm: ConflictAlgorithm.abort);
@@ -214,14 +302,26 @@ class DbService {
     }
 
     final data = <String, Object?>{
-      'nombre'    : _n(c.nombre),
-      'apellido'  : _n(c.apellido),
-      'telefono'  : _n(c.telefono),
-      'direccion' : _n(c.direccion),
-      'cedula'    : ced,
-      'sexo'      : SexoCodec.toDb(c.sexo),
-      'creado_en' : _n(c.creadoEn),
-      'foto_path' : _n(c.fotoPath),
+      // Personales
+      'nombre': _n(c.nombre),
+      'apellido': _n(c.apellido),
+      'telefono': _n(c.telefono),
+      'direccion': _n(c.direccion),
+      'cedula': ced,
+      'sexo': c.sexo == null ? null : SexoCodec.encode(c.sexo), // ← null-safe
+      'creado_en': _n(c.creadoEn),
+      'foto_path': _n(c.fotoPath),
+
+      // Laborales
+      'empresa': _n(c.empresa),
+      'ingresos': c.ingresos,
+      'estado_civil': c.estadoCivil == null
+          ? null
+          : EstadoCivilCodec.encode(c.estadoCivil),           // ← null-safe (sin !)
+      'dependientes': c.dependientes,
+      'direccion_trabajo': _n(c.direccionTrabajo),
+      'puesto_trabajo': _n(c.puestoTrabajo),
+      'meses_trabajando': c.mesesTrabajando,
     };
 
     return db.update(
@@ -244,8 +344,11 @@ class DbService {
 
     if (filtro != null && filtro.trim().isNotEmpty) {
       final q = '%${filtro.trim()}%';
-      where = 'WHERE nombre LIKE ? OR apellido LIKE ? OR telefono LIKE ?';
-      args = [q, q, q];
+      where = '''
+        WHERE nombre LIKE ? OR apellido LIKE ? OR telefono LIKE ?
+           OR empresa LIKE ? OR puesto_trabajo LIKE ?
+      ''';
+      args = [q, q, q, q, q];
     }
 
     final lim = (limit != null) ? ' LIMIT $limit' : '';
@@ -253,7 +356,8 @@ class DbService {
 
     final rows = await db.rawQuery('''
       SELECT
-        id, nombre, apellido, telefono, direccion, cedula, sexo, creado_en, foto_path
+        id, nombre, apellido, telefono, direccion, cedula, sexo, creado_en, foto_path,
+        empresa, ingresos, estado_civil, dependientes, direccion_trabajo, puesto_trabajo, meses_trabajando
       FROM clientes
       $where
       ORDER BY nombre COLLATE NOCASE ASC, apellido COLLATE NOCASE ASC
@@ -280,17 +384,17 @@ class DbService {
   Future<int> crearPrestamo(Prestamo p) async {
     final db = await _db;
     final data = <String, Object?>{
-      'clienteId'       : p.clienteId,
-      'monto'           : p.monto,
+      'clienteId': p.clienteId,
+      'monto': p.monto,
       'balancePendiente': p.balancePendiente,
-      'totalAPagar'     : p.totalAPagar,
-      'cuotasTotales'   : p.cuotasTotales,
-      'cuotasPagadas'   : p.cuotasPagadas,
-      'interes'         : p.interes,
-      'modalidad'       : p.modalidad,
+      'totalAPagar': p.totalAPagar,
+      'cuotasTotales': p.cuotasTotales,
+      'cuotasPagadas': p.cuotasPagadas,
+      'interes': p.interes,
+      'modalidad': p.modalidad,
       'tipoAmortizacion': p.tipoAmortizacion,
-      'fechaInicio'     : p.fechaInicio,
-      'proximoPago'     : p.proximoPago,
+      'fechaInicio': p.fechaInicio,
+      'proximoPago': p.proximoPago,
     };
     return db.insert('prestamos', data, conflictAlgorithm: ConflictAlgorithm.abort);
   }
@@ -501,20 +605,44 @@ class DbService {
     });
   }
 
-  // ============ Pagos con nombre de cliente ============
+  // ============ Pagos AGRUPADOS (capital + interés) ============
+
   Future<List<PagoVista>> listarPagosConCliente({int? limit}) async {
     final db = await _db;
     final lim = (limit != null && limit > 0) ? ' LIMIT $limit' : '';
 
     final rows = await db.rawQuery('''
       SELECT
-        pg.id                AS pagoId,
-        pg.prestamoId        AS prestamoId,
-        pr.clienteId         AS clienteId,
         TRIM(COALESCE(c.nombre, '') || ' ' || COALESCE(c.apellido, '')) AS clienteNombre,
-        pg.monto             AS monto,
-        pg.fecha             AS fecha,
-        pg.nota              AS nota
+        pr.id          AS prestamoId,
+        DATE(pg.fecha) AS fecha,
+        IFNULL(SUM(pg.monto), 0) AS monto
+      FROM pagos pg
+      INNER JOIN prestamos pr ON pr.id = pg.prestamoId
+      LEFT JOIN clientes  c   ON c.id = pr.clienteId
+      WHERE
+        pg.nota LIKE '[capital]%'  OR pg.nota LIKE '[CAPITAL]%' OR
+        pg.nota LIKE '[interes]%'  OR pg.nota LIKE '[INTERES]%'
+      GROUP BY clienteNombre, pr.id, DATE(pg.fecha)
+      ORDER BY DATE(pg.fecha) DESC
+      $lim
+    ''');
+
+    return rows.map((m) => PagoVista.fromMap(m)).toList();
+  }
+
+  // ============ Pagos DETALLE (sin agrupar), opcional ============
+  Future<List<PagoVista>> listarPagosConClienteDetalle({int? limit}) async {
+    final db = await _db;
+    final lim = (limit != null && limit > 0) ? ' LIMIT $limit' : '';
+
+    final rows = await db.rawQuery('''
+      SELECT
+        TRIM(COALESCE(c.nombre, '') || ' ' || COALESCE(c.apellido, '')) AS clienteNombre,
+        pr.id          AS prestamoId,
+        pg.fecha       AS fecha,
+        pg.monto       AS monto,
+        pg.nota        AS nota
       FROM pagos pg
       INNER JOIN prestamos pr ON pr.id = pg.prestamoId
       LEFT JOIN clientes  c   ON c.id = pr.clienteId
@@ -523,6 +651,49 @@ class DbService {
     ''');
 
     return rows.map((m) => PagoVista.fromMap(m)).toList();
+  }
+
+  // ────────────────── SOLICITUDES ──────────────────
+
+  Future<Solicitud> crearSolicitud({String? nombre, String? telefono}) async {
+    final db = await _db;
+    final lead = _nuevoLeadId();
+    final link = _linkDeSolicitud(lead);
+    final now = DateTime.now();
+
+    final data = {
+      'leadId': lead,
+      'nombre': nombre,
+      'telefono': telefono,
+      'estado': 'enviada',
+      'urlFormulario': link,
+      'creadoEn': now.toIso8601String(),
+    };
+
+    final id = await db.insert('solicitudes', data);
+    return Solicitud.fromMap({...data, 'id': id});
+  }
+
+  Future<List<Solicitud>> listarSolicitudes({int? limit}) async {
+    final db = await _db;
+    final lim = (limit != null && limit > 0) ? ' LIMIT $limit' : '';
+    final rows = await db.rawQuery('''
+      SELECT id, leadId, nombre, telefono, estado, urlFormulario, creadoEn
+      FROM solicitudes
+      ORDER BY datetime(creadoEn) DESC
+      $lim
+    ''');
+    return rows.map((m) => Solicitud.fromMap(m)).toList();
+  }
+
+  Future<void> actualizarEstadoSolicitud(int id, String estado) async {
+    final db = await _db;
+    await db.update('solicitudes', {'estado': estado}, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> eliminarSolicitud(int id) async {
+    final db = await _db;
+    await db.delete('solicitudes', where: 'id = ?', whereArgs: [id]);
   }
 
   // ────────────────── Estadísticas para INICIO ──────────────────
@@ -542,9 +713,8 @@ class DbService {
 
   Future<({int activos, int total})> conteoClientesActivosYTotal() async {
     final db = await _db;
-    final total = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM clientes'),
-        ) ?? 0;
+    final total =
+        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM clientes')) ?? 0;
 
     final activos = Sqflite.firstIntValue(await db.rawQuery('''
       SELECT COUNT(DISTINCT clienteId)
@@ -559,13 +729,12 @@ class DbService {
       conteoClientesActivosDetalle() async {
     final db = await _db;
 
-    final totalClientes = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM clientes'),
-        ) ?? 0;
+    final totalClientes =
+        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM clientes')) ?? 0;
 
-    final totalPrestamo = Sqflite.firstIntValue(await db.rawQuery('''
-      SELECT COUNT(DISTINCT clienteId) FROM prestamos
-    ''')) ?? 0;
+    final totalPrestamo = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(DISTINCT clienteId) FROM prestamos')) ??
+        0;
 
     final activos = Sqflite.firstIntValue(await db.rawQuery('''
       SELECT COUNT(DISTINCT clienteId)
@@ -578,12 +747,10 @@ class DbService {
 
   Future<({int activos, int total})> conteoPrestamosActivosYTotal() async {
     final db = await _db;
-    final total = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM prestamos'),
-        ) ?? 0;
-    final activos = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM prestamos WHERE balancePendiente > 0'),
-        ) ?? 0;
+    final total =
+        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM prestamos')) ?? 0;
+    final activos = Sqflite.firstIntValue(await db
+            .rawQuery('SELECT COUNT(*) FROM prestamos WHERE balancePendiente > 0')) ?? 0;
     return (activos: activos, total: total);
   }
 

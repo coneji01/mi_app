@@ -1,42 +1,31 @@
+// lib/models/pago_vista.dart
 class PagoVista {
-  final int pagoId;
-  final int prestamoId;
-  final int? clienteId;
   final String clienteNombre;
-  final double monto;
   final DateTime fecha;
+  final double monto;
+  final int? prestamoId;
   final String? nota;
 
   PagoVista({
-    required this.pagoId,
-    required this.prestamoId,
-    required this.clienteId,
     required this.clienteNombre,
-    required this.monto,
     required this.fecha,
+    required this.monto,
+    this.prestamoId,
     this.nota,
   });
 
-  static DateTime _parseFecha(dynamic v) {
-    if (v == null) return DateTime.now();
-    if (v is DateTime) return v;
-    final s = v.toString();
-    // Acepta ISO-8601 u “YYYY-MM-DD …”
-    return DateTime.tryParse(s) ??
-        DateTime.tryParse(s.split(' ').first) ??
-        DateTime.now();
-  }
+  /// Soporta:
+  /// - Agrupada: clienteNombre, prestamoId, fecha('YYYY-MM-DD'), monto
+  /// - Detalle:  clienteNombre, prestamoId, fecha(ISO), monto, nota
+  factory PagoVista.fromMap(Map<String, dynamic> m) {
+    final rawFecha = (m['fecha'] as String?) ?? DateTime.now().toIso8601String();
+    final dt = DateTime.parse(rawFecha);
 
-  factory PagoVista.fromMap(Map<String, Object?> m) {
     return PagoVista(
-      pagoId: (m['pagoId'] as num).toInt(),
-      prestamoId: (m['prestamoId'] as num).toInt(),
-      clienteId: (m['clienteId'] as num?)?.toInt(),
-      clienteNombre: (m['clienteNombre'] as String?)?.trim().isNotEmpty == true
-          ? (m['clienteNombre'] as String).trim()
-          : 'Cliente',
-      monto: (m['monto'] as num?)?.toDouble() ?? 0.0,
-      fecha: _parseFecha(m['fecha']),
+      clienteNombre: (m['clienteNombre'] as String?)?.trim() ?? '—',
+      prestamoId: (m['prestamoId'] as num?)?.toInt(),
+      fecha: dt,
+      monto: (m['monto'] as num?)?.toDouble() ?? 0.0, // tolerante a NULL
       nota: m['nota'] as String?,
     );
   }
