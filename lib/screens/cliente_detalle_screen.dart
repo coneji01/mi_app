@@ -9,8 +9,9 @@ import '../data/db_service.dart';
 import 'calculadora_screen.dart';
 import 'nuevo_prestamo_screen.dart';
 import 'editar_cliente_screen.dart';
+import 'cliente_historial_screen.dart';
 
-enum _MenuAccion { nuevoPrestamo, editarCliente }
+enum _MenuAccion { nuevoPrestamo, verHistorial, editarCliente }
 
 class ClienteDetalleScreen extends StatefulWidget {
   final Cliente cliente;
@@ -104,6 +105,20 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
         );
         break;
 
+      case _MenuAccion.verHistorial:
+        if (_cliente.id == null) return;
+        final nombreCompleto =
+            '${_cliente.nombre ?? ''} ${_cliente.apellido ?? ''}'.trim();
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ClienteHistorialScreen(
+              clienteId: _cliente.id!,
+              clienteNombre: nombreCompleto.isEmpty ? null : nombreCompleto,
+            ),
+          ),
+        );
+        break;
+
       case _MenuAccion.editarCliente:
         final result = await Navigator.of(context).push(
           MaterialPageRoute(
@@ -122,6 +137,61 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
           _touched = true;
         }
         break;
+    }
+  }
+
+  /// Menú desplegable del botón con flecha (split-button)
+  Future<void> _showSplitMenu(BuildContext context) async {
+    final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final box = context.findRenderObject() as RenderBox?;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        box?.localToGlobal(Offset.zero, ancestor: overlay) ?? Offset.zero,
+        box?.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay) ??
+            const Offset(0, 0),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final selected = await showMenu<_MenuAccion>(
+      context: context,
+      position: position,
+      items: const [
+        PopupMenuItem(
+          value: _MenuAccion.nuevoPrestamo,
+          child: Row(
+            children: [
+              Icon(Icons.request_page_outlined),
+              SizedBox(width: 8),
+              Text('Crear préstamo'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: _MenuAccion.verHistorial,
+          child: Row(
+            children: [
+              Icon(Icons.history),
+              SizedBox(width: 8),
+              Text('Ver historial de préstamos'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: _MenuAccion.editarCliente,
+          child: Row(
+            children: [
+              Icon(Icons.edit),
+              SizedBox(width: 8),
+              Text('Editar cliente'),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (selected != null) {
+      await _onAccionSeleccionada(context, selected);
     }
   }
 
@@ -167,6 +237,16 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
                   ),
                 ),
                 PopupMenuItem(
+                  value: _MenuAccion.verHistorial,
+                  child: Row(
+                    children: [
+                      Icon(Icons.history),
+                      SizedBox(width: 8),
+                      Text('Ver historial de préstamos'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
                   value: _MenuAccion.editarCliente,
                   child: Row(
                     children: [
@@ -180,12 +260,58 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             ),
           ],
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          heroTag: 'fab_cliente_detalle',
-          onPressed: () => _onAccionSeleccionada(context, _MenuAccion.nuevoPrestamo),
-          icon: const Icon(Icons.add),
-          label: const Text('Crear préstamo'),
+
+        // === BARRA INFERIOR con botón ancho + flecha (split-button) ===
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Row(
+              children: [
+                // Botón principal: ancho, azul (usa tu theme), texto en mayúsculas
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('AGREGAR PRÉSTAMO'),
+                    onPressed: () =>
+                        _onAccionSeleccionada(context, _MenuAccion.nuevoPrestamo),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                      textStyle: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Botón flecha (menú desplegable) estilo split-button
+                SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () => _showSplitMenu(context),
+                    style: ElevatedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                      padding: EdgeInsets.zero,
+                    ),
+                    child: const Icon(Icons.arrow_drop_down),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
+
         body: ListView(
           padding: const EdgeInsets.all(16),
           children: [

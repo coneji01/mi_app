@@ -1,31 +1,47 @@
 // lib/models/prestamo.dart
+
 class Prestamo {
   final int? id;
   final int clienteId;
+
+  // Monetarios / métricas
   final double monto;
-  final double balancePendiente;
-  final double totalAPagar;
+  final double? balancePendiente;
+  final double? totalAPagar;
+
+  // Cuotas
   final int cuotasTotales;
-  final int cuotasPagadas;
-  final double interes;          // % por periodo (ej. 0.10 = 10%)
+  final int? cuotasPagadas;
+
+  // Condiciones
+  final double interes;          // p.ej. 0.10 = 10% por periodo
   final String modalidad;        // Semanal/Quincenal/Mensual
-  final String tipoAmortizacion; // Francés, Interés Fijo, etc.
-  final String? fechaInicio;     // ISO-8601 (TEXT en SQLite)
-  final String? proximoPago;     // ISO-8601 (TEXT en SQLite)
+  final String tipoAmort;        // Francés, Interés Fijo, etc.
+
+  // ⛳ Compatibilidad con UI antigua (p.tipoAmortizacion)
+  String get tipoAmortizacion => tipoAmort;
+
+  // Fechas/estado
+  final DateTime fechaInicio;
+  final DateTime? proximoPago;
+  final String? estado;          // 'activo' | 'saldado' | ...
+  final DateTime? creadoEn;      // solo lectura desde backend
 
   const Prestamo({
     this.id,
     required this.clienteId,
     required this.monto,
-    required this.balancePendiente,
-    required this.totalAPagar,
+    this.balancePendiente,
+    this.totalAPagar,
     required this.cuotasTotales,
-    required this.cuotasPagadas,
+    this.cuotasPagadas,
     required this.interes,
     required this.modalidad,
-    required this.tipoAmortizacion,
-    this.fechaInicio,
+    required this.tipoAmort,
+    required this.fechaInicio,
     this.proximoPago,
+    this.estado,
+    this.creadoEn,
   });
 
   // ---------------- copyWith ----------------
@@ -39,9 +55,11 @@ class Prestamo {
     int? cuotasPagadas,
     double? interes,
     String? modalidad,
-    String? tipoAmortizacion,
-    String? fechaInicio,
-    String? proximoPago,
+    String? tipoAmort,
+    DateTime? fechaInicio,
+    DateTime? proximoPago,
+    String? estado,
+    DateTime? creadoEn,
   }) {
     return Prestamo(
       id: id ?? this.id,
@@ -53,62 +71,134 @@ class Prestamo {
       cuotasPagadas: cuotasPagadas ?? this.cuotasPagadas,
       interes: interes ?? this.interes,
       modalidad: modalidad ?? this.modalidad,
-      tipoAmortizacion: tipoAmortizacion ?? this.tipoAmortizacion,
+      tipoAmort: tipoAmort ?? this.tipoAmort,
       fechaInicio: fechaInicio ?? this.fechaInicio,
       proximoPago: proximoPago ?? this.proximoPago,
+      estado: estado ?? this.estado,
+      creadoEn: creadoEn ?? this.creadoEn,
     );
   }
 
-  // ---------------- fromMap ----------------
-  /// Soporta filas que traen `id` *o* alias `prestamoId` (por JOIN).
-  factory Prestamo.fromMap(Map<String, dynamic> map) {
-    // helpers de parseo tolerantes (int/double/string)
-    int _i(v) => (v is int) ? v : int.parse(v.toString());
-    double _d(v) => (v is num) ? v.toDouble() : double.parse(v.toString());
-    T? _s<T>(dynamic v) => v == null ? null : v.toString() as T?;
-
-    final anyId = map.containsKey('id') ? map['id'] : map['prestamoId'];
-
+  // ---------------- fromJson ----------------
+  /// Alineado con el backend (snake_case). Admite alias `prestamoId`.
+  factory Prestamo.fromJson(Map<String, dynamic> j) {
+    final anyId = j.containsKey('id') ? j['id'] : j['prestamoId'];
     return Prestamo(
-      id: anyId == null ? null : _i(anyId),
-      clienteId: _i(map['clienteId']),
-      monto: _d(map['monto']),
-      balancePendiente: _d(map['balancePendiente']),
-      totalAPagar: _d(map['totalAPagar']),
-      cuotasTotales: _i(map['cuotasTotales']),
-      cuotasPagadas: _i(map['cuotasPagadas']),
-      interes: _d(map['interes']),
-      modalidad: map['modalidad']?.toString() ?? 'Mensual',
-      tipoAmortizacion: map['tipoAmortizacion']?.toString() ?? 'Interés Fijo',
-      fechaInicio: _s<String>(map['fechaInicio']),
-      proximoPago: _s<String>(map['proximoPago']),
+      id: _toInt(anyId),
+      clienteId: _toInt(j['cliente_id']) ?? _toInt(j['clienteId'])!,
+      monto: _toDouble(j['monto']) ?? 0.0,
+      balancePendiente: _toDouble(j['balance_pendiente'] ?? j['balancePendiente']),
+      totalAPagar: _toDouble(j['total_a_pagar'] ?? j['totalAPagar']),
+      cuotasTotales: _toInt(j['cuotas_totales'] ?? j['cuotasTotales']) ?? 0,
+      cuotasPagadas: _toInt(j['cuotas_pagadas'] ?? j['cuotasPagadas']),
+      interes: _toDouble(j['interes']) ?? 0.0,
+      modalidad: (j['modalidad'] ?? j['modalidad']).toString(),
+      tipoAmort: (j['tipo_amort'] ?? j['tipoAmortizacion'] ?? j['tipo_amortizacion'] ?? 'Interes Fijo').toString(),
+      fechaInicio: _parseDate(j['fecha_inicio'] ?? j['fechaInicio']) ?? DateTime.now(),
+      proximoPago: _parseDate(j['proximo_pago'] ?? j['proximoPago']),
+      estado: (j['estado'] as String?) ?? 'activo',
+      creadoEn: _parseDateTime(j['creado_en']),
     );
   }
 
-  // ---------------- toMap ----------------
-  Map<String, Object?> toMap({bool includeId = false}) {
-    final m = <String, Object?>{
-      'clienteId'        : clienteId,
-      'monto'            : monto,
-      'balancePendiente' : balancePendiente,
-      'totalAPagar'      : totalAPagar,
-      'cuotasTotales'    : cuotasTotales,
-      'cuotasPagadas'    : cuotasPagadas,
-      'interes'          : interes,
-      'modalidad'        : modalidad,
-      'tipoAmortizacion' : tipoAmortizacion,
-      'fechaInicio'      : fechaInicio,
-      'proximoPago'      : proximoPago,
-    };
-    if (includeId && id != null) m['id'] = id;
-    return m;
-  }
+  // ---------------- toJson (completo) ----------------
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'cliente_id': clienteId,
+        'monto': monto,
+        'balance_pendiente': balancePendiente,
+        'total_a_pagar': totalAPagar,
+        'cuotas_totales': cuotasTotales,
+        'cuotas_pagadas': cuotasPagadas,
+        'interes': interes,
+        'modalidad': modalidad,
+        'tipo_amort': tipoAmort,
+        'fecha_inicio': _dateStr(fechaInicio),
+        'proximo_pago': _dateStr(proximoPago),
+        'estado': estado,
+        'creado_en': _dateTimeStr(creadoEn),
+      };
+
+  /// Payload para **crear** en API (no manda `id`/`creado_en`)
+  Map<String, dynamic> toCreatePayload() => {
+        'cliente_id': clienteId,
+        'monto': monto,
+        'interes': interes,
+        'modalidad': modalidad,
+        'tipo_amort': tipoAmort,
+        'cuotas_totales': cuotasTotales,
+        'fecha_inicio': _dateStr(fechaInicio),
+        // opcionales
+        'balance_pendiente': balancePendiente,
+        'total_a_pagar': totalAPagar,
+        'cuotas_pagadas': cuotasPagadas,
+        'proximo_pago': _dateStr(proximoPago),
+        'estado': estado,
+      }..removeWhere((k, v) => v == null);
+
+  /// Payload para **actualizar** en API (no manda `id`/`creado_en`)
+  Map<String, dynamic> toUpdatePayload() => {
+        'cliente_id': clienteId,
+        'monto': monto,
+        'interes': interes,
+        'modalidad': modalidad,
+        'tipo_amort': tipoAmort,
+        'cuotas_totales': cuotasTotales,
+        'fecha_inicio': _dateStr(fechaInicio),
+        'balance_pendiente': balancePendiente,
+        'total_a_pagar': totalAPagar,
+        'cuotas_pagadas': cuotasPagadas,
+        'proximo_pago': _dateStr(proximoPago),
+        'estado': estado,
+      }..removeWhere((k, v) => v == null);
 
   @override
   String toString() =>
-      'Prestamo(id: $id, clienteId: $clienteId, monto: $monto, '
-      'balancePendiente: $balancePendiente, totalAPagar: $totalAPagar, '
-      'cuotas: $cuotasPagadas/$cuotasTotales, interes: $interes, '
-      'modalidad: $modalidad, tipo: $tipoAmortizacion, '
-      'inicio: $fechaInicio, proximo: $proximoPago)';
+      'Prestamo(id:$id, cliente:$clienteId, monto:$monto, '
+      'saldo:$balancePendiente, total:$totalAPagar, '
+      'cuotas:$cuotasPagadas/$cuotasTotales, interes:$interes, '
+      'modalidad:$modalidad, tipo:$tipoAmort, '
+      'inicio:${_dateStr(fechaInicio)}, prox:${_dateStr(proximoPago)}, estado:$estado)';
 }
+
+// ---------------- helpers ----------------
+double? _toDouble(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  final s = v.toString().trim();
+  if (s.isEmpty) return null;
+  return double.tryParse(s);
+}
+
+int? _toInt(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toInt();
+  final s = v.toString().trim();
+  if (s.isEmpty) return null;
+  return int.tryParse(s);
+}
+
+DateTime? _parseDate(Object? v) {
+  if (v == null) return null;
+  final s = v.toString();
+  try {
+    if (s.length >= 10) {
+      return DateTime.parse(s.substring(0, 10));
+    }
+    return DateTime.parse(s);
+  } catch (_) {
+    return null;
+  }
+}
+
+DateTime? _parseDateTime(Object? v) {
+  if (v == null) return null;
+  try {
+    return DateTime.parse(v.toString());
+  } catch (_) {
+    return null;
+  }
+}
+
+String? _dateStr(DateTime? d) => d == null ? null : d.toIso8601String().substring(0, 10);
+String? _dateTimeStr(DateTime? d) => d?.toIso8601String();

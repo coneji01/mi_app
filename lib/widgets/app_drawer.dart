@@ -1,3 +1,4 @@
+// lib/widgets/app_drawer.dart
 import 'package:flutter/material.dart';
 
 // --- Importaciones de Pantallas ---
@@ -7,7 +8,9 @@ import '../screens/clientes_screen.dart';
 import '../screens/prestamos_screen.dart';
 import '../screens/pagos_screen.dart';
 import '../screens/calculadora_screen.dart';
-import '../screens/configuracion_screen.dart' as cfg; // ✅ alias para evitar choques
+import '../screens/configuracion_screen.dart' as cfg;
+// ⬇️ Fallback si no usas rutas nombradas:
+import '../screens/login_screen.dart';
 
 enum AppSection {
   inicio,
@@ -49,17 +52,31 @@ class AppDrawer extends StatelessWidget {
   }
 
   void _logout(BuildContext context) {
+    // Cierra el drawer primero
     Navigator.pop(context);
-    Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+
+    // (Opcional) aquí puedes limpiar tokens en SharedPreferences si usas auth.
+    // final prefs = await SharedPreferences.getInstance();
+    // await prefs.remove('token');
+
+    // Preferimos la ruta nombrada /login; si no existe, usamos fallback.
+    try {
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+    } catch (_) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (r) => false,
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     TextStyle _itemStyle(bool selected) => TextStyle(
-      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-      color: selected ? primary : null,
-    );
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          color: selected ? primary : null,
+        );
 
     return Drawer(
       child: SafeArea(
@@ -138,12 +155,12 @@ class AppDrawer extends StatelessWidget {
                   color: current == AppSection.configuracion ? primary : null),
               title: Text('Configuración', style: _itemStyle(current == AppSection.configuracion)),
               selected: current == AppSection.configuracion,
-              // 🔑 Usa el alias cfg para instanciar la pantalla
               onTap: () => _navToSecondary(context, const cfg.ConfiguracionScreen()),
             ),
 
             const Divider(),
 
+            // ===== Cerrar sesión =====
             ListTile(
               leading: const Icon(Icons.logout),
               title: const Text('Cerrar sesión'),

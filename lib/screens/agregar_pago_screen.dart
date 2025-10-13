@@ -86,7 +86,9 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
 
     try {
       final p = await DbService.instance.getPrestamoById(widget.prestamoId);
-      if (p == null) throw Exception('No existe el préstamo #${widget.prestamoId}.');
+      if (p == null) {
+        throw Exception('No existe el préstamo #${widget.prestamoId}.');
+      }
 
       // Base simple: capital/periodo + interés/periodo
       _capitalPorCuota = p.monto / p.cuotasTotales;
@@ -94,13 +96,14 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       _cuotaTotal = _capitalPorCuota + _interesPorCuota;
 
       // Cuotas restantes
-      final rest = p.cuotasTotales - p.cuotasPagadas;
+      final pagadas = p.cuotasPagadas ?? 0;
+      final rest = p.cuotasTotales - pagadas;
       final restantesPos = rest <= 0 ? 1 : rest;
       _opcionesCuotas = List<int>.generate(restantesPos, (i) => i + 1);
       _nCuotas = 1;
 
       // Primera cuota ABS pendiente
-      _primeraPendienteAbs = p.cuotasPagadas + 1;
+      _primeraPendienteAbs = pagadas + 1;
 
       _p = p;
       _recalcular();
@@ -127,7 +130,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     final low = modalidad.toLowerCase();
     if (low.contains('seman')) return const Duration(days: 7);
     if (low.contains('mens')) return const Duration(days: 30);
-    return const Duration(days: 15); // quincenal (ajusta a 14 si así lo manejas)
+    return const Duration(days: 15); // quincenal (ajústalo si trabajas con 14)
   }
 
   DateTime _sumarPeriodos(DateTime d, String modalidad, int n) {
@@ -140,14 +143,10 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
 
   // Próxima fecha de vencimiento (#cuota = cuotasPagadas+1)
   DateTime _primeraFechaVencimiento(Prestamo p) {
-    final isoProx = p.proximoPago;
-    if (isoProx != null && isoProx.isNotEmpty) {
-      return DateTime.tryParse(isoProx) ?? DateTime.now();
-    }
-    final inicio = DateTime.tryParse(p.fechaInicio ?? '');
-    if (inicio == null) return DateTime.now();
-    final k = (p.cuotasPagadas) + 1;
-    return _sumarPeriodos(inicio, p.modalidad, math.max(k, 1));
+    final DateTime base = p.proximoPago ?? p.fechaInicio;
+    final pagadas = p.cuotasPagadas ?? 0;
+    final k = pagadas + 1;
+    return _sumarPeriodos(base, p.modalidad, math.max(k, 1));
   }
 
   // Fecha de vencimiento de la cuota relativa (1 = la próxima sin pagar)
@@ -270,23 +269,22 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       if (sumarCuotas > 0) {
         final db = await DbService.instance.database;
 
-        final nuevasCuotas = (p.cuotasPagadas + sumarCuotas) > p.cuotasTotales
-            ? p.cuotasTotales
-            : p.cuotasPagadas + sumarCuotas;
+        final pagadas = p.cuotasPagadas ?? 0;
+        final nuevasCuotas =
+            (pagadas + sumarCuotas) > p.cuotasTotales ? p.cuotasTotales : pagadas + sumarCuotas;
 
         // Base para el avance del próximo vencimiento
-        final base = (p.proximoPago != null && p.proximoPago!.isNotEmpty)
-            ? (DateTime.tryParse(p.proximoPago!) ?? DateTime.now())
-            : (DateTime.tryParse(p.fechaInicio ?? '') ?? DateTime.now());
+        final DateTime base = p.proximoPago ?? p.fechaInicio;
 
         final nuevoProx =
             _sumarPeriodos(base, p.modalidad, sumarCuotas).toIso8601String();
 
+        // OJO: ajusta nombres de columnas a tu tabla local
         await db.update(
           'prestamos',
           {
             'cuotasPagadas': nuevasCuotas,
-            'proximoPago': nuevoProx,
+            'proximoPago': nuevoProx, // si usas snake_case: 'proximo_pago'
           },
           where: 'id = ?',
           whereArgs: [p.id],
@@ -628,22 +626,6 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
               border: OutlineInputBorder(),
             ),
             maxLines: 2,
-          ),
-          const SizedBox(height: 12),
-
-          // ===== Seleccionar foto (placeholder) =====
-          ListTile(
-            leading: const Icon(Icons.attachment),
-            title: const Text('Seleccionar foto'),
-            shape: RoundedRectangleBorder(
-              side: BorderSide(color: Theme.of(context).dividerColor),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Adjuntos: pendiente de implementar')),
-              );
-            },
           ),
           const SizedBox(height: 120), // margen para la barra inferior
         ],

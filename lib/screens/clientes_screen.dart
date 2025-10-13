@@ -1,9 +1,12 @@
+// lib/screens/clientes_screen.dart
 import 'package:flutter/material.dart';
 import '../widgets/app_drawer.dart';
-import '../data/db_service.dart';
 import '../models/cliente.dart';
 import 'nuevo_cliente_screen.dart';
 import 'package:mi_app/screens/cliente_detalle_screen.dart'; // <-- deja este o el relativo, no ambos
+
+// 🔄 Nuevo: repositorio que conmuta Local (SQLite) / Backend
+import '../data/repository.dart';
 
 class ClientesScreen extends StatefulWidget {
   const ClientesScreen({super.key});
@@ -12,12 +15,11 @@ class ClientesScreen extends StatefulWidget {
 }
 
 class _ClientesScreenState extends State<ClientesScreen> {
-  final _db = DbService.instance;
-
   List<Cliente> _clientes = [];
   bool _cargando = true;
   String? _error;
 
+  // normaliza: recorta y convierte null -> ''
   String _nn(String? s) => s?.trim() ?? '';
 
   @override
@@ -28,7 +30,7 @@ class _ClientesScreenState extends State<ClientesScreen> {
 
   Future<void> _cargar() async {
     try {
-      final data = await _db.getClientes();
+      final data = await _fetchClientesDesdeRepositorio();
       if (!mounted) return;
       setState(() {
         _clientes = data;
@@ -42,6 +44,26 @@ class _ClientesScreenState extends State<ClientesScreen> {
         _error = '$e';
       });
     }
+  }
+
+  /// Obtiene clientes desde Repository (que puede ser local o backend).
+  /// Soporta dos escenarios:
+  /// 1) El repo devuelve List<Cliente>.
+  /// 2) El repo devuelve List<Map<String,dynamic>> y aquí lo convertimos con Cliente.fromMap.
+  Future<List<Cliente>> _fetchClientesDesdeRepositorio() async {
+    final dynamic any = await Repository.i.clientes(); // puede ser List<Cliente> o List<Map>
+    if (any is List<Cliente>) {
+      return any;
+    }
+    if (any is List) {
+      return any.map<Cliente>((e) {
+        if (e is Cliente) return e;
+        // Intentamos convertir a Map para fromMap:
+        final m = Map<String, dynamic>.from(e as Map);
+        return Cliente.fromMap(m);
+      }).toList();
+    }
+    return <Cliente>[];
   }
 
   Future<void> _irNuevoCliente() async {
@@ -92,8 +114,7 @@ class _ClientesScreenState extends State<ClientesScreen> {
                             : _nn(c.direccion);
                         return ListTile(
                           title: Text(titulo.isEmpty ? 'Sin nombre' : titulo),
-                          subtitle:
-                              subtituloSrc.isEmpty ? null : Text(subtituloSrc),
+                          subtitle: subtituloSrc.isEmpty ? null : Text(subtituloSrc),
                           onTap: () => _irDetalle(c),
                         );
                       },

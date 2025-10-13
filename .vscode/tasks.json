@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start AVD: Pixel 9 Pro XL",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "$ErrorActionPreference='Stop'; adb kill-server; $emupath = \"$env:LOCALAPPDATA\\Android\\Sdk\\emulator\\emulator.exe\"; Start-Process -FilePath $emupath -ArgumentList '-avd Pixel_9_Pro_XL -netdelay none -netspeed full -no-boot-anim' -WindowStyle Hidden; Write-Host '⏳ Esperando a que el emulador inicie...'; for ($i=0; $i -lt 120; $i++) { Start-Sleep -Seconds 2; $boot = adb shell getprop sys.boot_completed 2>$null; if ($boot -match '1') { Write-Host '✅ Emulador listo.'; exit 0 } }; Write-Error '❌ El emulador no completó el arranque a tiempo.'; exit 1;"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

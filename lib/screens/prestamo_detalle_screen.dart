@@ -7,7 +7,6 @@ import '../widgets/app_drawer.dart';
 import 'agregar_pago_screen.dart';
 
 class PrestamoDetalleScreen extends StatefulWidget {
-  /// Pásame un id válido por constructor o por arguments
   final int? prestamoId;
   final String? clienteNombre;
 
@@ -29,13 +28,11 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
   bool _loading = true;
   String? _error;
 
-  // evita recargas dobles desde initState + didChangeDependencies
   bool _loadedOnce = false;
 
   @override
   void initState() {
     super.initState();
-    // no llamamos _load() aquí para poder leer arguments con context
   }
 
   @override
@@ -54,7 +51,6 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     });
 
     try {
-      // 1) obtener id del constructor o de arguments
       int? id = widget.prestamoId;
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is int) id ??= args;
@@ -63,7 +59,6 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
         throw Exception('ID de préstamo inválido.');
       }
 
-      // 2) cargar préstamo y pagos
       final prestamo = await _db.getPrestamoById(id);
       if (prestamo == null) throw Exception('No existe el préstamo #$id.');
       final pagos = await _db.listarPagosDePrestamo(id);
@@ -83,7 +78,7 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     }
   }
 
-  // ===== UI Helpers =====
+  // ===== Helpers =====
   double _asDouble(dynamic v, [double fb = 0]) {
     if (v == null) return fb;
     if (v is double) return v;
@@ -92,6 +87,26 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
   }
 
   String _asString(dynamic v, [String fb = '']) => v?.toString() ?? fb;
+
+  /// Acepta DateTime? o String? (ISO). Devuelve texto amigable.
+  String _fmtFechaDyn(dynamic v) {
+    if (v == null) return '—';
+    DateTime? d;
+    if (v is DateTime) {
+      d = v;
+    } else if (v is String) {
+      d = DateTime.tryParse(v);
+    } else {
+      d = DateTime.tryParse(v.toString());
+    }
+    if (d == null) return '—';
+    final y = d.year.toString();
+    final m = d.month.toString().padLeft(2, '0');
+    final dd = d.day.toString().padLeft(2, '0');
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    return '$y-$m-$dd $hh:$mm';
+  }
 
   String _fmtMoney(num? v) {
     final d = (v ?? 0).toDouble();
@@ -104,18 +119,6 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     return 'RD\$$intPart${parts.length > 1 && parts[1] != '00' ? '.${parts[1]}' : ''}';
   }
 
-  String _fmtFecha(String? iso) {
-    if (iso == null || iso.isEmpty) return '—';
-    final d = DateTime.tryParse(iso);
-    if (d == null) return '—';
-    final y = d.year.toString();
-    final m = d.month.toString().padLeft(2, '0');
-    final dd = d.day.toString().padLeft(2, '0');
-    final hh = d.hour.toString().padLeft(2, '0');
-    final mm = d.minute.toString().padLeft(2, '0');
-    return '$y-$m-$dd $hh:$mm';
-  }
-
   // ===== Acciones =====
   Future<void> _goAgregarPago() async {
     final p = _prestamo;
@@ -123,14 +126,13 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
 
     final ok = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => AgregarPagoScreen(prestamoId: p.id!), // ← FIX
+        builder: (_) => AgregarPagoScreen(prestamoId: p.id!),
       ),
     );
-    if (ok == true) _load(); // refresca resumen e historial
+    if (ok == true) _load();
   }
 
   void _onMenu(String action) {
-    // Stubs; luego conectamos lógica real
     switch (action) {
       case 'editar':
       case 'anular':
@@ -202,6 +204,7 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     final p = _prestamo!;
     final id = p.id ?? 0;
     final nombreCliente = widget.clienteNombre ?? '—';
+    final interesPct = (p.interes * 100).toStringAsFixed(2);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -222,11 +225,11 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
                 _fila('Total a pagar', _fmtMoney(p.totalAPagar)),
                 _fila('Saldo', _fmtMoney(p.balancePendiente)),
                 _fila('Cuotas', '${p.cuotasPagadas} de ${p.cuotasTotales}'),
-                _fila('Interés', '${p.interes} %'),
+                _fila('Interés', '$interesPct %'),
                 _fila('Modalidad', p.modalidad),
-                _fila('Amortización', p.tipoAmortizacion),
-                _fila('Inicio', _fmtFecha(p.fechaInicio)),
-                _fila('Próximo pago', _fmtFecha(p.proximoPago)),
+                _fila('Amortización', p.tipoAmortizacion), // asegúrate que el modelo tenga este nombre
+                _fila('Inicio', _fmtFechaDyn(p.fechaInicio)),
+                _fila('Próximo pago', _fmtFechaDyn(p.proximoPago)),
               ],
             ),
           ),
@@ -246,13 +249,13 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
                 dense: true,
                 title: Text(_fmtMoney(_asDouble(pg['monto']))),
                 subtitle: Text(
-                  'Fecha: ${_fmtFecha(_asString(pg['fecha']))}'
+                  'Fecha: ${_fmtFechaDyn(pg['fecha'])}'
                   '${_asString(pg['nota']).isNotEmpty ? '\nNota: ${_asString(pg['nota'])}' : ''}',
                 ),
               ),
             ),
           ),
-        const SizedBox(height: 80), // margen para el FAB
+        const SizedBox(height: 80),
       ],
     );
   }
@@ -272,5 +275,4 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
       ),
     );
   }
-  
 }

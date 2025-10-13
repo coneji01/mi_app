@@ -1,7 +1,11 @@
+// lib/screens/calculadora_screen.dart
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
+
+// Si tienes utilidades en core/amortizacion.dart, puedes dejarlas importadas.
+// Este archivo es autosuficiente, así que no dependemos de ellas estrictamente.
 
 import '../models/prestamo_propuesta.dart';
 import '../widgets/app_drawer.dart';
@@ -21,7 +25,7 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
   final _montoCtrl = TextEditingController();
   final _tasaCtrl = TextEditingController();   // % por período
   final _cuotasCtrl = TextEditingController();
-  final _cuotaAjustadaCtrl = TextEditingController(); // NUEVO
+  final _cuotaAjustadaCtrl = TextEditingController(); // opcional: ajusta tasa
 
   // Por defecto
   String _modalidad = 'Quincenal';
@@ -29,11 +33,11 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
 
   // Resultado
   List<_AmRow> _tabla = [];
-  double? _cuota;          // cuota constante (para Interés Fijo/Francés)
-  double? _total;          // total a pagar (suma cuotas)
-  double _totalInteres = 0; // ganancia por interés
-  double _capPorCuota = 0;  // para mostrar en resumen
-  double _intPorCuota = 0;  // para mostrar en resumen (1ra cuota p/Francés/Alemán)
+  double? _cuota;            // cuota "de referencia" (ver notas abajo)
+  double? _total;            // suma de cuotas
+  double _totalInteres = 0;  // suma de intereses
+  double _capPorCuota = 0;   // para resumen (primera cuota)
+  double _intPorCuota = 0;   // para resumen (primera cuota)
 
   final _money = NumberFormat.currency(locale: 'es_DO', symbol: 'RD\$');
   final _date = DateFormat('dd/MM/yyyy');
@@ -55,62 +59,67 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
         border: const OutlineInputBorder(),
       );
 
-  double _parseDouble(String s) =>
-      double.parse(s.trim().replaceAll(',', '.'));
+  double _parseDouble(String s) => double.parse(s.trim().replaceAll(',', '.'));
 
   // ─────────────────── LÓGICA ───────────────────
+  // Nota de “cuota de referencia”:
+  // - Interés Fijo: cuota constante = capital/n + monto*i
+  // - Cuota Fija  : cuota constante tipo francés
+  // - Disminuir Cuota: usamos como referencia la CUOTA 1 (luego disminuye 2% por período)
+  // - Capital al final: referencia = primera cuota (solo interés)
 
-  double _cuotaSegunAmortizacion({
+  double _cuotaReferencia({
     required double monto,
-    required double tasaPorPeriodoPct,
+    required double tasaPct,
     required int n,
-    required String tipoAmort,
+    required String tipo,
   }) {
-    final i = tasaPorPeriodoPct / 100.0;
+    final i = tasaPct / 100.0;
 
-    switch (tipoAmort) {
+    switch (tipo) {
       case 'Interés Fijo':
-        // cuota fija = capital/n + monto*i
         return (monto / n) + (monto * i);
 
-      case 'Francés':
-        // cuota fija de anualidad
+      case 'Cuota Fija': // sistema francés
         if (i == 0) return monto / n;
         final factor = i / (1 - math.pow(1 + i, -n));
         return monto * factor;
 
-      case 'Alemán':
-        // en alemán la cuota NO es constante; tomamos la 1ra cuota
-        final amort = monto / n;
-        final interesPrimera = monto * i;
-        return amort + interesPrimera;
+      case 'Disminuir Cuota':
+        // Referencia = la primera cuota calculada con francés; luego bajará 2% cada período
+        if (i == 0) return monto / n;
+        final factor = i / (1 - math.pow(1 + i, -n));
+        return monto * factor;
+
+      case 'Capital al final':
+        // primeras cuotas solo interés; referencia = interes del primer período
+        return monto * i;
 
       default:
         return (monto / n) + (monto * i);
     }
   }
 
-  /// Recalculamos el % por período para igualar una cuota deseada (Interés Fijo/Francés).
+  /// Ajusta la tasa para que la CUOTA sea exactamente la deseada.
+  /// Aplica solamente a: Interés Fijo y Cuota Fija.
   double _tasaAjustadaPorCuota({
     required double monto,
     required int n,
-    required String tipoAmort,
+    required String tipo,
     required double cuotaDeseada,
   }) {
-    // Caso inválido
     if (monto <= 0 || n <= 0 || cuotaDeseada <= 0) return 0;
 
-    if (tipoAmort == 'Interés Fijo') {
+    if (tipo == 'Interés Fijo') {
       // cuota = monto/n + monto * i  →  i = (cuota - monto/n) / monto
       final capitalPorCuota = monto / n;
       final i = (cuotaDeseada - capitalPorCuota) / monto;
       return i <= 0 ? 0 : i * 100;
     }
 
-    if (tipoAmort == 'Francés') {
-      // Resolver en r: cuota = M * r / (1 - (1+r)^-n)
-      // bisección en r ∈ [0, 1] (0%..100% por período)
-      double lo = 0.0, hi = 1.0; // 0% ... 100% por período
+    if (tipo == 'Cuota Fija') {
+      // cuota = M * r / (1 - (1+r)^-n) → resolver r por bisección
+      double lo = 0.0, hi = 1.0; // 0%..100% por periodo
       for (int it = 0; it < 60; it++) {
         final mid = (lo + hi) / 2;
         final pago = (mid == 0)
@@ -123,17 +132,13 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
         }
       }
       final r = (lo + hi) / 2;
-      if (r < 0) return 0;
-      return r * 100;
+      return r < 0 ? 0 : r * 100;
     }
 
-    // Alemán: no tiene cuota fija → devolvemos el % actual (no ajustamos)
+    // Para los demás, no procede.
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text(
-          'El ajuste de "Cuota (ajustada)" aplica a Interés Fijo o Francés. '
-          'En Alemán la cuota no es constante.'
-        ),
+        content: Text('El ajuste de "Cuota (ajustada)" aplica a Interés Fijo y Cuota Fija.'),
       ),
     );
     return _parseDouble(_tasaCtrl.text);
@@ -155,33 +160,35 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
     required double monto,
     required double tasaPct,
     required int n,
-    required String tipoAmort,
+    required String tipo,
   }) {
     final i = tasaPct / 100.0;
     final rows = <_AmRow>[];
     var saldo = monto;
     var f = _sumarPeriodo(DateTime.now());
 
-    final cuotaRef = _cuotaSegunAmortizacion(
-        monto: monto, tasaPorPeriodoPct: tasaPct, n: n, tipoAmort: tipoAmort);
+    // Parámetro de reducción para "Disminuir Cuota"
+    const reduccionPct = 0.02; // 2% menos cada período
+
+    final cuotaRef = _cuotaReferencia(monto: monto, tasaPct: tasaPct, n: n, tipo: tipo);
 
     for (var k = 1; k <= n; k++) {
       double interes;
       double amort;
       double cuota;
 
-      switch (tipoAmort) {
+      switch (tipo) {
         case 'Interés Fijo':
           interes = monto * i;     // fijo
           amort   = monto / n;     // fijo
           cuota   = amort + interes;
-          if (k == n) amort = saldo;
+          if (k == n) amort = saldo; // remate
           break;
 
-        case 'Francés':
+        case 'Cuota Fija': // francés
           interes = saldo * i;
           amort   = cuotaRef - interes;
-          if (k == n) {
+          if (k == n) {     // última ajusta para cerrar saldo
             amort = saldo;
             cuota = amort + interes;
           } else {
@@ -189,14 +196,30 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
           }
           break;
 
-        case 'Alemán':
-          amort = monto / n;
-          if (k == n) amort = saldo;
+        case 'Disminuir Cuota':
+          // Cuota decreciente: partimos de cuota tipo francés y bajamos 2% cada período
+          final cuotaK = cuotaRef * math.pow(1 - reduccionPct, (k - 1));
           interes = saldo * i;
+          amort   = cuotaK - interes;
+          if (amort < 0) amort = 0; // por si la tasa es alta
+          if (amort > saldo || k == n) amort = saldo; // cierre
           cuota   = amort + interes;
           break;
 
+        case 'Capital al final':
+          if (k < n) {
+            interes = saldo * i;  // saldo = monto hasta el final
+            amort   = 0;
+            cuota   = interes;
+          } else {
+            interes = saldo * i;
+            amort   = saldo;      // todo el capital al final
+            cuota   = amort + interes;
+          }
+          break;
+
         default:
+          // fallback: interés fijo
           interes = monto * i;
           amort   = monto / n;
           cuota   = amort + interes;
@@ -205,7 +228,7 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
       saldo = (saldo - amort);
       if (saldo.abs() < 0.01) saldo = 0;
 
-      // Redondeos estéticos a 2 decimales
+      // Redondeos visuales
       cuota   = double.parse(cuota.toStringAsFixed(2));
       amort   = double.parse(amort.toStringAsFixed(2));
       interes = double.parse(interes.toStringAsFixed(2));
@@ -219,45 +242,44 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
 
   // ─────────────────── ACCIONES ───────────────────
 
- void _calcular() {
-  if (!_formKey.currentState!.validate()) return;
+  void _calcular() {
+    if (!_formKey.currentState!.validate()) return;
 
-  final monto  = _parseDouble(_montoCtrl.text);
-  final cuotas = int.parse(_cuotasCtrl.text.trim());
+    final monto  = _parseDouble(_montoCtrl.text);
+    final cuotas = int.parse(_cuotasCtrl.text.trim());
 
-  // ⬇️ antes: final cuotaDeseada = ... ? 0 : _parseDouble(...);
-  final double cuotaDeseada = _cuotaAjustadaCtrl.text.trim().isEmpty
-      ? 0.0
-      : _parseDouble(_cuotaAjustadaCtrl.text);
+    final double cuotaDeseada = _cuotaAjustadaCtrl.text.trim().isEmpty
+        ? 0.0
+        : _parseDouble(_cuotaAjustadaCtrl.text);
 
-  double tasaPct = _parseDouble(_tasaCtrl.text); // % por período
-  if (cuotaDeseada > 0.0) {
-    tasaPct = _tasaAjustadaPorCuota(
-      monto: monto,
-      n: cuotas,
-      tipoAmort: _tipoAmort,
-      cuotaDeseada: cuotaDeseada, // ahora es double ✔️
-    );
-    _tasaCtrl.text = tasaPct.toStringAsFixed(4);
-  }
+    double tasaPct = _parseDouble(_tasaCtrl.text); // % por período
 
-    // cuota de referencia (constante en Interés Fijo / Francés)
-    final cuota  = _cuotaSegunAmortizacion(
-        monto: monto, tasaPorPeriodoPct: tasaPct, n: cuotas, tipoAmort: _tipoAmort);
+    if (cuotaDeseada > 0.0) {
+      tasaPct = _tasaAjustadaPorCuota(
+        monto: monto,
+        n: cuotas,
+        tipo: _tipoAmort,
+        cuotaDeseada: cuotaDeseada,
+      );
+      _tasaCtrl.text = tasaPct.toStringAsFixed(4);
+    }
+
+    // cuota de referencia (ver nota arriba)
+    final cuotaRef  = _cuotaReferencia(
+        monto: monto, tasaPct: tasaPct, n: cuotas, tipo: _tipoAmort);
 
     final tabla  = _armarTabla(
-        monto: monto, tasaPct: tasaPct, n: cuotas, tipoAmort: _tipoAmort);
+        monto: monto, tasaPct: tasaPct, n: cuotas, tipo: _tipoAmort);
 
     final total  = tabla.fold<double>(0, (s, r) => s + r.cuota);
     final totInt = tabla.fold<double>(0, (s, r) => s + r.interes);
 
-    // para el resumen: tomamos la 1ra fila
     final first = tabla.isNotEmpty ? tabla.first : null;
     _capPorCuota = first?.abonoCapital ?? (monto / cuotas);
     _intPorCuota = first?.interes ?? (monto * (tasaPct / 100.0));
 
     setState(() {
-      _cuota = double.parse(cuota.toStringAsFixed(2));
+      _cuota = double.parse(cuotaRef.toStringAsFixed(2));
       _total = double.parse(total.toStringAsFixed(2));
       _totalInteres = double.parse(totInt.toStringAsFixed(2));
       _tabla = tabla;
@@ -270,8 +292,8 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
     sb.writeln('Opciones de cuotas para un préstamo de ${_money.format(monto)}');
 
     for (final n in opciones) {
-      final c = _cuotaSegunAmortizacion(
-          monto: monto, tasaPorPeriodoPct: tasa, n: n, tipoAmort: tipo);
+      final c = _cuotaReferencia(
+          monto: monto, tasaPct: tasa, n: n, tipo: tipo);
       sb.writeln('• $n cuotas: ${_money.format(c)}');
     }
     sb.writeln('\n¿Cuál de estas cuotas te gustaría pagar?');
@@ -314,11 +336,11 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
 
     final propuesta = PrestamoPropuesta(
       monto: monto,
-      interes: tasa,                 // requerido por tu modelo
+      interes: tasa,
       cuotas: cuotas,
       modalidad: _modalidad,
       tipoAmortizacion: _tipoAmort,
-      tasaPorPeriodo: tasa,          // alias que también usas
+      tasaPorPeriodo: tasa,
       tipo: _tipoAmort,
       cuota: _cuota!,
       total: _total ?? (_cuota! * cuotas),
@@ -382,7 +404,7 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
                       ),
                       const SizedBox(height: 12),
 
-                      // NUEVO: cuota ajustada
+                      // Cuota (ajustada) opcional
                       TextFormField(
                         controller: _cuotaAjustadaCtrl,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -390,8 +412,8 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
                           'Cuota (ajustada opcional)',
                           icon: Icons.tune,
                           helper:
-                              'Si la escribes, se recalcula el % para que la cuota sea exactamente esta.\n'
-                              'Aplica para Interés Fijo y Francés.',
+                              'Si la escribes, se recalcula la tasa para que la cuota sea EXACTA.\n'
+                              'Aplica a Interés Fijo y Cuota Fija.',
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -411,13 +433,15 @@ class _CalculadoraScreenState extends State<CalculadoraScreen> {
                       ),
                       const SizedBox(height: 12),
 
+                      // Nuevo set de amortizaciones
                       DropdownButtonFormField<String>(
                         value: _tipoAmort,
                         decoration: _dec('Tipo de amortización', icon: Icons.rule),
                         items: const [
                           DropdownMenuItem(value: 'Interés Fijo', child: Text('Interés Fijo')),
-                          DropdownMenuItem(value: 'Francés', child: Text('Francés')),
-                          DropdownMenuItem(value: 'Alemán', child: Text('Alemán')),
+                          DropdownMenuItem(value: 'Cuota Fija', child: Text('Cuota Fija')),
+                          DropdownMenuItem(value: 'Disminuir Cuota', child: Text('Disminuir Cuota')),
+                          DropdownMenuItem(value: 'Capital al final', child: Text('Capital al final')),
                         ],
                         onChanged: (v) => setState(() => _tipoAmort = v ?? _tipoAmort),
                       ),

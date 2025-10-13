@@ -32,6 +32,8 @@ dependencies:
   url_launcher: ^6.3.0
   font_awesome_flutter: ^10.7.0   # íconos (WhatsApp etc.)
   shared_preferences: ^2.2.3      # ✅ Preferencias locales
+  http: ^1.2.2
+  
 
 dev_dependencies:
   flutter_test:

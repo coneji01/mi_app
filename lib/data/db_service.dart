@@ -1,6 +1,5 @@
 // lib/data/db_service.dart
 import 'dart:math';
-
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -33,7 +32,7 @@ class DbService {
     final path = join(await getDatabasesPath(), 'mi_app.db');
     return openDatabase(
       path,
-      version: 6, // ⬅️ v6 agrega columnas laborales en clientes
+      version: 7, // ⬅️ v7 agrega columna 'estado' en prestamos
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
@@ -80,6 +79,7 @@ class DbService {
             tipoAmortizacion  TEXT    NOT NULL,
             fechaInicio       TEXT    NOT NULL,
             proximoPago       TEXT,
+            estado            TEXT    NOT NULL DEFAULT 'Activo',
             FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
           );
         ''');
@@ -147,6 +147,7 @@ class DbService {
               tipoAmortizacion  TEXT    NOT NULL,
               fechaInicio       TEXT    NOT NULL,
               proximoPago       TEXT,
+              estado            TEXT    NOT NULL DEFAULT 'Activo',
               FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
             );
           ''');
@@ -196,6 +197,15 @@ class DbService {
           await _try('ALTER TABLE clientes ADD COLUMN direccion_trabajo TEXT');
           await _try('ALTER TABLE clientes ADD COLUMN puesto_trabajo TEXT');
           await _try('ALTER TABLE clientes ADD COLUMN meses_trabajando INTEGER');
+        }
+
+        // v7: agregar columna 'estado' a prestamos si no existía
+        if (oldV < 7) {
+          try {
+            await db.execute(
+              "ALTER TABLE prestamos ADD COLUMN estado TEXT NOT NULL DEFAULT 'Activo';"
+            );
+          } catch (_) {/* ya existía */}
         }
       },
     );
@@ -271,7 +281,7 @@ class DbService {
       'telefono': _n(c.telefono),
       'direccion': _n(c.direccion),
       'cedula': ced,
-      'sexo': c.sexo == null ? null : SexoCodec.encode(c.sexo), // ← null-safe
+      'sexo': c.sexo == null ? null : SexoCodec.encode(c.sexo),
       'creado_en': _n(c.creadoEn),
       'foto_path': _n(c.fotoPath),
 
@@ -280,7 +290,7 @@ class DbService {
       'ingresos': c.ingresos,
       'estado_civil': c.estadoCivil == null
           ? null
-          : EstadoCivilCodec.encode(c.estadoCivil),           // ← null-safe (sin !)
+          : EstadoCivilCodec.encode(c.estadoCivil),
       'dependientes': c.dependientes,
       'direccion_trabajo': _n(c.direccionTrabajo),
       'puesto_trabajo': _n(c.puestoTrabajo),
@@ -308,7 +318,7 @@ class DbService {
       'telefono': _n(c.telefono),
       'direccion': _n(c.direccion),
       'cedula': ced,
-      'sexo': c.sexo == null ? null : SexoCodec.encode(c.sexo), // ← null-safe
+      'sexo': c.sexo == null ? null : SexoCodec.encode(c.sexo),
       'creado_en': _n(c.creadoEn),
       'foto_path': _n(c.fotoPath),
 
@@ -317,7 +327,7 @@ class DbService {
       'ingresos': c.ingresos,
       'estado_civil': c.estadoCivil == null
           ? null
-          : EstadoCivilCodec.encode(c.estadoCivil),           // ← null-safe (sin !)
+          : EstadoCivilCodec.encode(c.estadoCivil),
       'dependientes': c.dependientes,
       'direccion_trabajo': _n(c.direccionTrabajo),
       'puesto_trabajo': _n(c.puestoTrabajo),
@@ -384,17 +394,18 @@ class DbService {
   Future<int> crearPrestamo(Prestamo p) async {
     final db = await _db;
     final data = <String, Object?>{
-      'clienteId': p.clienteId,
-      'monto': p.monto,
-      'balancePendiente': p.balancePendiente,
-      'totalAPagar': p.totalAPagar,
-      'cuotasTotales': p.cuotasTotales,
-      'cuotasPagadas': p.cuotasPagadas,
-      'interes': p.interes,
-      'modalidad': p.modalidad,
-      'tipoAmortizacion': p.tipoAmortizacion,
-      'fechaInicio': p.fechaInicio,
-      'proximoPago': p.proximoPago,
+      'clienteId'        : p.clienteId,
+      'monto'            : p.monto,
+      'balancePendiente' : p.balancePendiente,
+      'totalAPagar'      : p.totalAPagar,
+      'cuotasTotales'    : p.cuotasTotales,
+      'cuotasPagadas'    : p.cuotasPagadas ?? 0,
+      'interes'          : p.interes,
+      'modalidad'        : p.modalidad,
+      'tipoAmortizacion' : p.tipoAmort, // ← propiedad del modelo
+      'fechaInicio'      : p.fechaInicio.toIso8601String(),
+      'proximoPago'      : p.proximoPago?.toIso8601String(),
+      // 'estado': 'Activo', // la DB pone DEFAULT 'Activo'
     };
     return db.insert('prestamos', data, conflictAlgorithm: ConflictAlgorithm.abort);
   }
@@ -408,7 +419,8 @@ class DbService {
       limit: 1,
     );
     if (rows.isEmpty) return null;
-    return Prestamo.fromMap(rows.first);
+    // El modelo acepta camelCase/snake_case
+    return Prestamo.fromJson(rows.first);
   }
 
   Future<List<Map<String, dynamic>>> listarPrestamosConCliente() async {
@@ -430,6 +442,7 @@ class DbService {
         p.tipoAmortizacion,
         p.fechaInicio,
         p.proximoPago,
+        p.estado,
 
         max(0, p.monto - ifnull((
           SELECT SUM(pg.monto)
@@ -486,8 +499,9 @@ class DbService {
               'prestamos',
               {
                 'balancePendiente': 0.0,
-                'cuotasPagadas': cuotasTot,
-                'proximoPago': null,
+                'cuotasPagadas'   : cuotasTot,
+                'proximoPago'     : null,
+                'estado'          : 'Saldado',
               },
               where: 'id = ?',
               whereArgs: [prestamoId],
@@ -495,7 +509,10 @@ class DbService {
           } else {
             await txn.update(
               'prestamos',
-              {'balancePendiente': newBal},
+              {
+                'balancePendiente': newBal,
+                'estado'          : 'Activo',
+              },
               where: 'id = ?',
               whereArgs: [prestamoId],
             );
@@ -596,8 +613,9 @@ class DbService {
         'prestamos',
         {
           'balancePendiente': balanceFinal,
-          'cuotasPagadas': nuevasCuotasPagadas,
-          'proximoPago': nuevoProximoPago,
+          'cuotasPagadas'   : nuevasCuotasPagadas,
+          'proximoPago'     : nuevoProximoPago,
+          'estado'          : (balanceFinal == 0.0) ? 'Saldado' : 'Activo',
         },
         where: 'id = ?',
         whereArgs: [prestamoId],
@@ -632,6 +650,7 @@ class DbService {
   }
 
   // ============ Pagos DETALLE (sin agrupar), opcional ============
+
   Future<List<PagoVista>> listarPagosConClienteDetalle({int? limit}) async {
     final db = await _db;
     final lim = (limit != null && limit > 0) ? ' LIMIT $limit' : '';
@@ -749,8 +768,9 @@ class DbService {
     final db = await _db;
     final total =
         Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM prestamos')) ?? 0;
-    final activos = Sqflite.firstIntValue(await db
-            .rawQuery('SELECT COUNT(*) FROM prestamos WHERE balancePendiente > 0')) ?? 0;
+    final activos = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM prestamos WHERE balancePendiente > 0')) ??
+        0;
     return (activos: activos, total: total);
   }
 

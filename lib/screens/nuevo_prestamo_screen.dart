@@ -4,11 +4,11 @@ import '../data/db_service.dart';
 import '../models/prestamo.dart';
 
 class NuevoPrestamoScreen extends StatefulWidget {
-  // Compatibilidad con ClienteDetalleScreen / Calculadora
+  // Compatibilidad con pantallas que puedan pasar datos
   final dynamic cliente;        // objeto Cliente o Map (opcional)
   final dynamic propuesta;      // PrestamoPropuesta o Map (opcional)
 
-  // Alternativas (por constructor o arguments)
+  // Alternativas (por constructor o por arguments)
   final int? clienteId;
   final String? clienteNombre;
 
@@ -152,9 +152,10 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
     return 15;                            // por defecto, quincenal
   }
 
-  String? _calcularProximoPago(DateTime inicio, String modalidad) {
+  // ahora devuelve DateTime? (no String)
+  DateTime? _proximoPagoDate(DateTime inicio, String modalidad) {
     final dias = _diasPeriodo(modalidad);
-    return inicio.add(Duration(days: dias)).toIso8601String();
+    return inicio.add(Duration(days: dias));
   }
 
   double _asDouble(String? s, [double fb = 0]) {
@@ -261,23 +262,21 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
     if (monto != null) _montoCtrl.text = monto.toString();
 
     // interés % por periodo
-    final num? interes =
-        _getNum(p, ['interes', 'tasa', 'tasaInteres']);
+    final num? interes = _getNum(p, ['interes', 'tasa', 'tasaInteres']);
     if (interes != null) _interesCtrl.text = interes.toString();
 
     // cuotas
     final num? cuotas = _getNum(
-        p, ['cuotasTotales', 'cuotas', 'numCuotas', 'numeroCuotas', 'periodos', 'n']);
+      p, ['cuotasTotales', 'cuotas', 'numCuotas', 'numeroCuotas', 'periodos', 'n'],
+    );
     if (cuotas != null) _cuotasTotalesCtrl.text = cuotas.toInt().toString();
 
     // modalidad (opcional)
-    final String? modalidad =
-        _getStr(p, ['modalidad', 'frecuencia', 'periodicidad']);
+    final String? modalidad = _getStr(p, ['modalidad', 'frecuencia', 'periodicidad']);
     if (modalidad != null && modalidad.trim().isNotEmpty) _modalidad = modalidad;
 
     // tipo amortización (opcional)
-    final String? tipo =
-        _getStr(p, ['tipoAmortizacion', 'amortizacion']);
+    final String? tipo = _getStr(p, ['tipoAmortizacion', 'amortizacion']);
     if (tipo != null && tipo.trim().isNotEmpty) {
       _tipoAmortizacionCtrl.text = tipo;
     }
@@ -341,11 +340,17 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
         cuotasPagadas: 0,
         interes: interes,
         modalidad: _modalidad,
-        tipoAmortizacion: _tipoAmortizacionCtrl.text.trim().isEmpty
+
+        // nombre del campo en tu modelo
+        tipoAmort: _tipoAmortizacionCtrl.text.trim().isEmpty
             ? 'Interés Fijo'
             : _tipoAmortizacionCtrl.text.trim(),
-        fechaInicio: _fechaInicio.toIso8601String(),      // ISO-8601
-        proximoPago: _calcularProximoPago(_fechaInicio, _modalidad),
+
+        // tipos correctos: DateTime y DateTime?
+        fechaInicio: _fechaInicio,
+        proximoPago: _proximoPagoDate(_fechaInicio, _modalidad),
+
+        estado: 'activo',
       );
 
       final newId = await _db.crearPrestamo(p);
@@ -469,14 +474,14 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
                     onChanged: (v) {
                       if (v == null) return;
                       setState(() => _modalidad = v);
-                      _recalcularTotal(); // si quieres recalcular vista previa
+                      _recalcularTotal();
                     },
                   ),
                 ),
               ),
               const SizedBox(height: 12),
 
-              // Tipo amortización
+              // Tipo amortización (se guarda en p.tipoAmort)
               TextFormField(
                 controller: _tipoAmortizacionCtrl,
                 decoration: const InputDecoration(

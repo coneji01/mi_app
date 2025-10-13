@@ -45,5 +45,38 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- ===== App Transport Security (solo DEV si usas HTTP) ===== -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Permite HTTP en general (desarrollo). Quitar en producción. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+
+		<!--
+		ALTERNATIVA MÁS SEGURA (en lugar de NSAllowsArbitraryLoads):
+		Habilita solo tu dominio/IP. Descomenta y reemplaza "190.93.188.250".
+		Luego pon NSAllowsArbitraryLoads = false.
+
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>190.93.188.250</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSExceptionRequiresForwardSecrecy</key>
+				<false/>
+				<key>NSExceptionMinimumTLSVersion</key>
+				<string>TLSv1.0</string>
+			</dict>
+		</dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		-->
+	</dict>
+	<!-- ===== Fin ATS ===== -->
+
 </dict>
 </plist>
