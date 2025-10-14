@@ -2,13 +2,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Singleton con ChangeNotifier para exponer y persistir configuraciones
-/// de visibilidad y conexión (backend/local) del sistema, y el token de auth.
+/// Preferencias de la app:
+/// - Visibilidad de campos de Cliente
+/// - Token de autenticación
+/// - Backend URL **fija** (no editable)
 class Settings extends ChangeNotifier {
   Settings._();
   static final Settings instance = Settings._();
 
-  // === Claves de SharedPreferences ===
+  // ====== Constantes ======
+  /// URL fija del backend (sin slash final).
+  static const String fixedBackendUrl = 'http://190.93.188.250:8081';
+
+  // ====== Claves (visibilidad) ======
   static const _kShowTelefono          = 'show_telefono';
   static const _kShowCedula            = 'show_cedula';
   static const _kShowDireccion         = 'show_direccion';
@@ -21,15 +27,17 @@ class Settings extends ChangeNotifier {
   static const _kShowMesesTrabajando   = 'show_meses_trabajando';
   static const _kShowTelefonoTrabajo   = 'show_telefono_trabajo';
 
-  // === Conexión / Auth ===
-  static const _kBackendUrl  = 'backend_base_url';
-  static const _kStorageMode = 'storage_mode'; // 'local' | 'backend'
-  static const _kAuthToken   = 'auth_token';   // 🔐 NUEVO
+  // ====== Claves legacy (eliminadas) ======
+  static const _kBackendUrlLegacy  = 'backend_base_url';
+  static const _kStorageModeLegacy = 'storage_mode'; // 'local' | 'backend'
+
+  // ====== Auth ======
+  static const _kAuthToken = 'auth_token';
 
   SharedPreferences? _prefs;
   Future<void>? _initFuture;
 
-  // === Estado en memoria (defaults) ===
+  // ====== Estado (visibilidad) ======
   bool _showTelefono         = true;
   bool _showCedula           = true;
   bool _showDireccion        = true;
@@ -42,12 +50,11 @@ class Settings extends ChangeNotifier {
   bool _showMesesTrabajando  = true;
   bool _showTelefonoTrabajo  = true;
 
-  // === Configuración de backend / auth ===
-  String _backendUrl = '';
-  String _storageMode = 'local'; // valores válidos: local | backend
-  String? _authToken;            // 🔐 NUEVO
+  // ====== Auth ======
+  String? _authToken;
 
-  // === Getters públicos ===
+  // ====== Getters ======
+  // Visibilidad
   bool get showTelefono         => _showTelefono;
   bool get showCedula           => _showCedula;
   bool get showDireccion        => _showDireccion;
@@ -60,11 +67,13 @@ class Settings extends ChangeNotifier {
   bool get showMesesTrabajando  => _showMesesTrabajando;
   bool get showTelefonoTrabajo  => _showTelefonoTrabajo;
 
-  String get backendUrl => _backendUrl;
-  String get storageMode => _storageMode;
-  String? get authToken => _authToken; // 🔐 NUEVO
+  // Conexión (fija)
+  String get backendUrl => fixedBackendUrl;
 
-  /// Llama a esto al inicio de la app (por ejemplo en main) o el primer uso.
+  // Auth
+  String? get authToken => _authToken;
+
+  /// Cargar preferencias (llamar al inicio de la app).
   Future<void> ensureInitialized() {
     _initFuture ??= _init();
     return _initFuture!;
@@ -73,6 +82,7 @@ class Settings extends ChangeNotifier {
   Future<void> _init() async {
     _prefs = await SharedPreferences.getInstance();
 
+    // Visibilidad
     _showTelefono         = _prefs!.getBool(_kShowTelefono)         ?? _showTelefono;
     _showCedula           = _prefs!.getBool(_kShowCedula)           ?? _showCedula;
     _showDireccion        = _prefs!.getBool(_kShowDireccion)        ?? _showDireccion;
@@ -85,15 +95,21 @@ class Settings extends ChangeNotifier {
     _showMesesTrabajando  = _prefs!.getBool(_kShowMesesTrabajando)  ?? _showMesesTrabajando;
     _showTelefonoTrabajo  = _prefs!.getBool(_kShowTelefonoTrabajo)  ?? _showTelefonoTrabajo;
 
-    // 🆕 Cargar configuración de backend y auth
-    _backendUrl  = _prefs!.getString(_kBackendUrl)  ?? '';
-    _storageMode = _prefs!.getString(_kStorageMode) ?? 'local';
-    _authToken   = _prefs!.getString(_kAuthToken); // puede ser null
+    // Auth
+    _authToken = _prefs!.getString(_kAuthToken);
+
+    // Limpieza de claves legacy (si existieran)
+    if (_prefs!.containsKey(_kBackendUrlLegacy)) {
+      await _prefs!.remove(_kBackendUrlLegacy);
+    }
+    if (_prefs!.containsKey(_kStorageModeLegacy)) {
+      await _prefs!.remove(_kStorageModeLegacy);
+    }
 
     notifyListeners();
   }
 
-  // === Setters con persistencia (visibilidad) ===
+  // ====== Setters con persistencia (visibilidad) ======
   Future<void> setShowTelefono(bool v) async {
     _showTelefono = v; await _prefs?.setBool(_kShowTelefono, v); notifyListeners();
   }
@@ -128,23 +144,7 @@ class Settings extends ChangeNotifier {
     _showTelefonoTrabajo = v; await _prefs?.setBool(_kShowTelefonoTrabajo, v); notifyListeners();
   }
 
-  // === Setters de configuración ===
-  Future<void> setBackendUrl(String url) async {
-    _backendUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
-    await _prefs?.setString(_kBackendUrl, _backendUrl);
-    notifyListeners();
-  }
-
-  Future<void> setStorageMode(String mode) async {
-    if (mode != 'local' && mode != 'backend') {
-      throw ArgumentError("Modo inválido: debe ser 'local' o 'backend'");
-    }
-    _storageMode = mode;
-    await _prefs?.setString(_kStorageMode, mode);
-    notifyListeners();
-  }
-
-  /// 🔐 Guardar/limpiar token de autenticación
+  // ====== Auth ======
   Future<void> setAuthToken(String? token) async {
     _authToken = (token == null || token.isEmpty) ? null : token;
     if (_authToken == null) {
@@ -155,6 +155,13 @@ class Settings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 🔐 Atajo para cerrar sesión
   Future<void> logout() => setAuthToken(null);
+
+  // ====== Métodos legacy (eliminados) ======
+  /// Estos métodos existían cuando la URL era editable. Se dejan como no-op
+  /// para evitar errores si alguna pantalla antigua aún los llama.
+  @deprecated
+  Future<void> setBackendUrl(String _ignored) async {}
+  @deprecated
+  Future<void> setStorageMode(String _ignored) async {}
 }

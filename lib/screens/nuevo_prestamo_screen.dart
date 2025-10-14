@@ -1,15 +1,13 @@
 // lib/screens/nuevo_prestamo_screen.dart
 import 'package:flutter/material.dart';
-import '../data/db_service.dart';
-import '../models/prestamo.dart';
+import '../data/repository.dart';
 
 class NuevoPrestamoScreen extends StatefulWidget {
-  // Compatibilidad con pantallas que puedan pasar datos
+  // Compatibilidad con otras pantallas que puedan pasar datos
   final dynamic cliente;        // objeto Cliente o Map (opcional)
   final dynamic propuesta;      // PrestamoPropuesta o Map (opcional)
 
-  // Alternativas (por constructor o por arguments)
-  final int? clienteId;
+  final int? clienteId;         // también por constructor
   final String? clienteNombre;
 
   const NuevoPrestamoScreen({
@@ -26,16 +24,15 @@ class NuevoPrestamoScreen extends StatefulWidget {
 
 class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _db = DbService.instance;
 
   // Controllers
   final _montoCtrl = TextEditingController();
-  final _interesCtrl = TextEditingController();        // % por periodo
-  final _cuotasTotalesCtrl = TextEditingController();
-  final _totalAPagarCtrl = TextEditingController();    // puede autocalcularse o editarse
+  final _interesCtrl = TextEditingController(text: '0');        // % por período
+  final _cuotasTotalesCtrl = TextEditingController(text: '1');
+  final _totalAPagarCtrl = TextEditingController();             // opcional, UI
   final _tipoAmortizacionCtrl = TextEditingController(text: 'Interés Fijo');
 
-  // Modalidad
+  // Modalidad (UI) -> el backend espera: 'semanal' | 'quincenal' | 'mensual'
   final List<String> _modalidades = const ['Semanal', 'Quincenal', 'Mensual'];
   String _modalidad = 'Quincenal';
 
@@ -53,11 +50,6 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
   void initState() {
     super.initState();
     _fechaInicioCtrl.text = _fmtFecha(_fechaInicio);
-    // Defaults amables
-    _interesCtrl.text = '0';
-    _cuotasTotalesCtrl.text = '1';
-
-    // Prellenado desde propuesta si vino por constructor
     _prefillDesdePropuesta(widget.propuesta);
   }
 
@@ -65,44 +57,32 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    // 1) Args de la ruta (pueden traer cliente/propuesta)
+    // 1) Args de la ruta
     final args = ModalRoute.of(context)?.settings.arguments;
     if (args is Map) {
       _clienteId ??= (args['clienteId'] ?? args['id']) as int?;
-      _clienteNombre ??=
-          args['clienteNombre'] as String? ?? args['nombre'] as String?;
-      if (args.containsKey('propuesta')) {
-        _prefillDesdePropuesta(args['propuesta']);
-      }
+      _clienteNombre ??= args['clienteNombre'] as String? ?? args['nombre'] as String?;
+      if (args.containsKey('propuesta')) _prefillDesdePropuesta(args['propuesta']);
 
-      // objeto cliente completo
       if (args['cliente'] != null && _clienteId == null) {
         final c = args['cliente'];
-        try {
-          _clienteId = (c.id as int?);
-        } catch (_) {}
-        try {
-          if (_clienteId == null && c is Map) _clienteId = c['id'] as int?;
-        } catch (_) {}
+        try { _clienteId = (c.id as int?); } catch (_) {}
+        try { _clienteId ??= (c as Map)['id'] as int?; } catch (_) {}
         _clienteNombre ??= _nombreClienteFrom(c);
       }
     } else if (args is int) {
       _clienteId ??= args;
     }
 
-    // 2) Props directas por constructor
+    // 2) Props por constructor
     _clienteId ??= widget.clienteId;
     _clienteNombre ??= widget.clienteNombre;
 
-    // 3) Objeto `cliente` pasado por constructor
+    // 3) Objeto cliente por constructor
     if (_clienteId == null && widget.cliente != null) {
       final c = widget.cliente;
-      try {
-        _clienteId = (c.id as int?);
-      } catch (_) {}
-      try {
-        if (_clienteId == null && c is Map) _clienteId = c['id'] as int?;
-      } catch (_) {}
+      try { _clienteId = (c.id as int?); } catch (_) {}
+      try { _clienteId ??= (c as Map)['id'] as int?; } catch (_) {}
       _clienteNombre ??= _nombreClienteFrom(c);
     }
   }
@@ -142,22 +122,6 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
     }
   }
 
-  // ---- Helpers de periodicidad (7 / 15 / 30 días) ----
-  int _diasPeriodo(String modalidad) {
-    final m = modalidad.toLowerCase();
-    if (m.contains('seman')) return 7;   // semanal
-    if (m.contains('quin'))  return 15;  // quincenal
-    if (m.contains('mens'))  return 30;  // mensual
-    if (m.contains('diar'))  return 1;   // opcional: diario
-    return 15;                            // por defecto, quincenal
-  }
-
-  // ahora devuelve DateTime? (no String)
-  DateTime? _proximoPagoDate(DateTime inicio, String modalidad) {
-    final dias = _diasPeriodo(modalidad);
-    return inicio.add(Duration(days: dias));
-  }
-
   double _asDouble(String? s, [double fb = 0]) {
     if (s == null || s.trim().isEmpty) return fb;
     return double.tryParse(s.replaceAll(',', '.')) ?? fb;
@@ -179,7 +143,7 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
     }
   }
 
-  // ----- PREFILL ROBUSTO -----
+  // Prefill desde una propuesta (si viene de la calculadora)
   void _prefillDesdePropuesta(dynamic p) {
     if (p == null) return;
 
@@ -194,35 +158,24 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
           try {
             switch (k) {
               case 'monto':
-                return (src as dynamic).monto as num?;
               case 'principal':
-                return (src as dynamic).principal as num?;
               case 'capital':
-                return (src as dynamic).capital as num?;
+                return (src as dynamic).monto as num?;
               case 'interes':
-                return (src as dynamic).interes as num?;
               case 'tasa':
-                return (src as dynamic).tasa as num?;
               case 'tasaInteres':
-                return (src as dynamic).tasaInteres as num?;
+                return (src as dynamic).interes as num?;
               case 'cuotasTotales':
-                return (src as dynamic).cuotasTotales as num?;
               case 'cuotas':
-                return (src as dynamic).cuotas as num?;
               case 'numCuotas':
-                return (src as dynamic).numCuotas as num?;
               case 'numeroCuotas':
-                return (src as dynamic).numeroCuotas as num?;
               case 'periodos':
-                return (src as dynamic).periodos as num?;
               case 'n':
-                return (src as dynamic).n as num?;
+                return (src as dynamic).cuotasTotales as num?;
               case 'totalAPagar':
-                return (src as dynamic).totalAPagar as num?;
               case 'total':
-                return (src as dynamic).total as num?;
               case 'montoTotal':
-                return (src as dynamic).montoTotal as num?;
+                return (src as dynamic).totalAPagar as num?;
             }
           } catch (_) {}
         }
@@ -241,15 +194,12 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
           try {
             switch (k) {
               case 'modalidad':
-                return (src as dynamic).modalidad?.toString();
               case 'frecuencia':
-                return (src as dynamic).frecuencia?.toString();
               case 'periodicidad':
-                return (src as dynamic).periodicidad?.toString();
+                return (src as dynamic).modalidad?.toString();
               case 'tipoAmortizacion':
-                return (src as dynamic).tipoAmortizacion?.toString();
               case 'amortizacion':
-                return (src as dynamic).amortizacion?.toString();
+                return (src as dynamic).tipoAmortizacion?.toString();
             }
           } catch (_) {}
         }
@@ -257,40 +207,24 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
       return null;
     }
 
-    // monto
     final num? monto = _getNum(p, ['monto', 'principal', 'capital']);
     if (monto != null) _montoCtrl.text = monto.toString();
 
-    // interés % por periodo
     final num? interes = _getNum(p, ['interes', 'tasa', 'tasaInteres']);
     if (interes != null) _interesCtrl.text = interes.toString();
 
-    // cuotas
-    final num? cuotas = _getNum(
-      p, ['cuotasTotales', 'cuotas', 'numCuotas', 'numeroCuotas', 'periodos', 'n'],
-    );
+    final num? cuotas = _getNum(p, ['cuotasTotales', 'cuotas', 'numCuotas', 'numeroCuotas', 'periodos', 'n']);
     if (cuotas != null) _cuotasTotalesCtrl.text = cuotas.toInt().toString();
 
-    // modalidad (opcional)
     final String? modalidad = _getStr(p, ['modalidad', 'frecuencia', 'periodicidad']);
     if (modalidad != null && modalidad.trim().isNotEmpty) _modalidad = modalidad;
 
-    // tipo amortización (opcional)
     final String? tipo = _getStr(p, ['tipoAmortizacion', 'amortizacion']);
-    if (tipo != null && tipo.trim().isNotEmpty) {
-      _tipoAmortizacionCtrl.text = tipo;
-    }
+    if (tipo != null && tipo.trim().isNotEmpty) _tipoAmortizacionCtrl.text = tipo;
 
-    // total (si viene)
     final num? total = _getNum(p, ['totalAPagar', 'total', 'montoTotal']);
     if (total != null) _totalAPagarCtrl.text = total.toString();
-
-    // Si no vino total, lo calculamos
-    if (_totalAPagarCtrl.text.trim().isEmpty) {
-      _recalcularTotal();
-    } else {
-      setState(() {}); // refrescar UI
-    }
+    setState(() {});
   }
 
   void _recalcularTotal() {
@@ -303,23 +237,19 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
     setState(() {});
   }
 
-  // ================== Guardar ==================
+  // ================== Guardar (SOLO BACKEND) ==================
   Future<void> _guardar() async {
-    final form = _formKey.currentState;
-    if (form == null) return;
-
     if (_clienteId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Selecciona primero un cliente válido.')),
       );
       return;
     }
-    if (!form.validate()) return;
+    if (!_formKey.currentState!.validate()) return;
 
     final monto = _asDouble(_montoCtrl.text);
     final interes = _asDouble(_interesCtrl.text);
     final cuotasTotales = _asInt(_cuotasTotalesCtrl.text, 1);
-    final totalAPagar = _asDouble(_totalAPagarCtrl.text);
 
     if (monto <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -328,42 +258,35 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
       return;
     }
 
+    // Mapear modalidad UI -> valor API
+    final modalidadApi = _modalidad.toLowerCase(); // 'semanal'|'quincenal'|'mensual'
+
+    final body = <String, dynamic>{
+      'cliente_id': _clienteId,
+      'monto': monto,
+      'interes': interes,
+      'modalidad': modalidadApi,
+      'tipo_amort': _tipoAmortizacionCtrl.text.trim().isEmpty
+          ? 'Interés Fijo'
+          : _tipoAmortizacionCtrl.text.trim(),
+      'cuotas_totales': cuotasTotales,
+      'fecha_inicio': _fmtFecha(_fechaInicio), // YYYY-MM-DD
+      // Los siguientes los puede calcular el backend; no los enviamos:
+      // 'balance_pendiente', 'total_a_pagar', 'cuotas_pagadas', 'proximo_pago'
+    };
+
     setState(() => _saving = true);
-
     try {
-      final p = Prestamo(
-        clienteId: _clienteId!,
-        monto: monto,
-        balancePendiente: totalAPagar,
-        totalAPagar: totalAPagar,
-        cuotasTotales: cuotasTotales,
-        cuotasPagadas: 0,
-        interes: interes,
-        modalidad: _modalidad,
-
-        // nombre del campo en tu modelo
-        tipoAmort: _tipoAmortizacionCtrl.text.trim().isEmpty
-            ? 'Interés Fijo'
-            : _tipoAmortizacionCtrl.text.trim(),
-
-        // tipos correctos: DateTime y DateTime?
-        fechaInicio: _fechaInicio,
-        proximoPago: _proximoPagoDate(_fechaInicio, _modalidad),
-
-        estado: 'activo',
-      );
-
-      final newId = await _db.crearPrestamo(p);
-
+      await Repository.i.crearPrestamo(body);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Préstamo asignado (ID $newId)')),
+        const SnackBar(content: Text('Préstamo creado ✅')),
       );
-      Navigator.pop(context, newId);
+      Navigator.pop(context, true); // para que la lista de préstamos recargue
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al guardar: $e')),
+        SnackBar(content: Text('Error al crear préstamo: $e')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -378,9 +301,7 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
         : 'Cliente: $_clienteNombre';
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Nuevo préstamo'),
-      ),
+      appBar: AppBar(title: const Text('Nuevo préstamo')),
       body: SafeArea(
         child: Form(
           key: _formKey,
@@ -416,28 +337,20 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
                   border: OutlineInputBorder(),
                 ),
                 onChanged: (_) => _recalcularTotal(),
-                validator: (v) {
-                  final n = _asDouble(v);
-                  if (n <= 0) return 'Ingrese un monto válido';
-                  return null;
-                },
+                validator: (v) => _asDouble(v) <= 0 ? 'Ingrese un monto válido' : null,
               ),
               const SizedBox(height: 12),
 
-              // Interés % por periodo
+              // Interés % por período
               TextFormField(
                 controller: _interesCtrl,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
-                  labelText: 'Interés (%) por periodo',
+                  labelText: 'Interés (%) por período',
                   border: OutlineInputBorder(),
                 ),
                 onChanged: (_) => _recalcularTotal(),
-                validator: (v) {
-                  final n = _asDouble(v);
-                  if (n < 0) return 'No puede ser negativo';
-                  return null;
-                },
+                validator: (v) => _asDouble(v) < 0 ? 'No puede ser negativo' : null,
               ),
               const SizedBox(height: 12),
 
@@ -450,11 +363,7 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
                   border: OutlineInputBorder(),
                 ),
                 onChanged: (_) => _recalcularTotal(),
-                validator: (v) {
-                  final n = _asInt(v, 0);
-                  if (n <= 0) return 'Debe ser mayor que 0';
-                  return null;
-                },
+                validator: (v) => _asInt(v, 0) <= 0 ? 'Debe ser mayor que 0' : null,
               ),
               const SizedBox(height: 12),
 
@@ -481,7 +390,7 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
               ),
               const SizedBox(height: 12),
 
-              // Tipo amortización (se guarda en p.tipoAmort)
+              // Tipo amortización (se envía como tipo_amort)
               TextFormField(
                 controller: _tipoAmortizacionCtrl,
                 decoration: const InputDecoration(
@@ -492,30 +401,24 @@ class _NuevoPrestamoScreenState extends State<NuevoPrestamoScreen> {
               ),
               const SizedBox(height: 12),
 
-              // Total a pagar
+              // Total a pagar (informativo)
               TextFormField(
                 controller: _totalAPagarCtrl,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
-                  labelText: 'Total a pagar',
+                  labelText: 'Total estimado a pagar (informativo)',
                   prefixText: 'RD\$ ',
                   border: OutlineInputBorder(),
                 ),
-                validator: (v) {
-                  final n = _asDouble(v);
-                  if (n <= 0) return 'Ingrese un total válido';
-                  return null;
-                },
+                // no lo validamos ni lo enviamos si tu backend lo calcula
               ),
               const SizedBox(height: 20),
 
-              // Botón guardar
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
                   icon: _saving
-                      ? const SizedBox(
-                          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.save),
                   label: const Text('Asignar préstamo'),
                   onPressed: _saving ? null : _guardar,

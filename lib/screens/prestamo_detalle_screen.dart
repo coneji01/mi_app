@@ -6,6 +6,9 @@ import '../models/prestamo.dart';
 import '../widgets/app_drawer.dart';
 import 'agregar_pago_screen.dart';
 
+// 👇 usa el repositorio (backend) para eliminar
+import '../data/repository.dart';
+
 class PrestamoDetalleScreen extends StatefulWidget {
   final int? prestamoId;
   final String? clienteNombre;
@@ -29,11 +32,6 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
   String? _error;
 
   bool _loadedOnce = false;
-
-  @override
-  void initState() {
-    super.initState();
-  }
 
   @override
   void didChangeDependencies() {
@@ -88,7 +86,6 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
 
   String _asString(dynamic v, [String fb = '']) => v?.toString() ?? fb;
 
-  /// Acepta DateTime? o String? (ISO). Devuelve texto amigable.
   String _fmtFechaDyn(dynamic v) {
     if (v == null) return '—';
     DateTime? d;
@@ -119,6 +116,15 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     return 'RD\$$intPart${parts.length > 1 && parts[1] != '00' ? '.${parts[1]}' : ''}';
   }
 
+  // Muestra porcentaje correcto tanto si viene 0.06 como 6
+  String _pctText(num? raw) {
+    if (raw == null) return '—';
+    final d = raw.toDouble();
+    final pct = d <= 1 ? d * 100 : d;
+    final s = pct.toStringAsFixed(pct.truncateToDouble() == pct ? 0 : 2);
+    return '$s %';
+  }
+
   // ===== Acciones =====
   Future<void> _goAgregarPago() async {
     final p = _prestamo;
@@ -132,8 +138,52 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     if (ok == true) _load();
   }
 
+  // 🔴 Eliminar préstamo (backend)
+  Future<void> _eliminarPrestamo() async {
+    final id = _prestamo?.id;
+    if (id == null) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Eliminar préstamo'),
+        content: const Text(
+          'Esta acción eliminará el préstamo y sus pagos asociados. '
+          '¿Deseas continuar?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    try {
+      await Repository.i.deletePrestamo(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Préstamo #$id eliminado')),
+      );
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo eliminar: $e')),
+      );
+    }
+  }
+
   void _onMenu(String action) {
     switch (action) {
+      case 'eliminar':
+        _eliminarPrestamo();
+        break;
       case 'editar':
       case 'anular':
       case 'ajustar_capital':
@@ -160,18 +210,29 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
           PopupMenuButton<String>(
             onSelected: _onMenu,
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'editar',            child: Text('Editar')),
-              PopupMenuItem(value: 'anular',            child: Text('Anular Préstamo')),
-              PopupMenuItem(value: 'ajustar_capital',   child: Text('Ajustar Capital')),
-              PopupMenuItem(value: 'recalcular_mora',   child: Text('Recalcular Mora')),
-              PopupMenuItem(value: 'reenganche',        child: Text('Reenganche')),
-              PopupMenuItem(value: 'incobrable',        child: Text('Incobrable')),
-              PopupMenuDivider(),
-              PopupMenuItem(value: 'imprimir_contrato', child: Text('Imprimir Contrato')),
-              PopupMenuItem(value: 'imprimir_estado',   child: Text('Imprimir Estado')),
-              PopupMenuDivider(),
-              PopupMenuItem(value: 'contactar',         child: Text('Contactar')),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'editar',            child: Text('Editar')),
+              const PopupMenuItem(value: 'anular',            child: Text('Anular Préstamo')),
+              const PopupMenuItem(value: 'ajustar_capital',   child: Text('Ajustar Capital')),
+              const PopupMenuItem(value: 'recalcular_mora',   child: Text('Recalcular Mora')),
+              const PopupMenuItem(value: 'reenganche',        child: Text('Reenganche')),
+              const PopupMenuItem(value: 'incobrable',        child: Text('Incobrable')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'imprimir_contrato', child: Text('Imprimir Contrato')),
+              const PopupMenuItem(value: 'imprimir_estado',   child: Text('Imprimir Estado')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'contactar',         child: Text('Contactar')),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'eliminar',
+                child: Row(
+                  children: const [
+                    Icon(Icons.delete_outline, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Eliminar', style: TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
             ],
           ),
         ],
@@ -204,7 +265,6 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
     final p = _prestamo!;
     final id = p.id ?? 0;
     final nombreCliente = widget.clienteNombre ?? '—';
-    final interesPct = (p.interes * 100).toStringAsFixed(2);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -225,9 +285,9 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
                 _fila('Total a pagar', _fmtMoney(p.totalAPagar)),
                 _fila('Saldo', _fmtMoney(p.balancePendiente)),
                 _fila('Cuotas', '${p.cuotasPagadas} de ${p.cuotasTotales}'),
-                _fila('Interés', '$interesPct %'),
+                _fila('Interés', _pctText(p.interes)),           // ← porcentaje correcto
                 _fila('Modalidad', p.modalidad),
-                _fila('Amortización', p.tipoAmortizacion), // asegúrate que el modelo tenga este nombre
+                _fila('Amortización', p.tipoAmortizacion),
                 _fila('Inicio', _fmtFechaDyn(p.fechaInicio)),
                 _fila('Próximo pago', _fmtFechaDyn(p.proximoPago)),
               ],

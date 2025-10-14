@@ -1,186 +1,208 @@
 // lib/services/api_client.dart
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 
-/// Cliente HTTP alineado a tu Swagger + helpers de autenticación.
-/// Rutas base que asume (ajústalas si tu backend difiere):
-///   GET  /                       -> ping
-///   POST /auth/register          -> { ... }
-///   POST /auth/login             -> { access_token|token, ... }
-///   GET  /clientes
-///   POST /clientes
-///   PUT  /clientes/{cid}
-///   DELETE /clientes/{cid}
-///   GET  /prestamos
-///   POST /prestamos
-///   PUT  /prestamos/{pid}
-///   DELETE /prestamos/{pid}
-///   GET  /prestamos/{pid}/pagos
-///   POST /pagos
+/// Cliente HTTP para tu backend FastAPI.
+/// - En Web puedes pasar baseUrl = '' para usar mismo origen.
+/// - Maneja login con x-www-form-urlencoded.
+/// - Incluye timeouts y mensajes de error más claros.
 class ApiClient {
-  ApiClient(String base, {String? token})
-      : baseUrl = base.replaceAll(RegExp(r'/+$'), ''),
-        _token = token;
+  ApiClient(String baseUrl, {String? token})
+      : _baseUrl = _normalizeBase(baseUrl),
+        _token = token,
+        _client = http.Client();
 
-  /// URL base **sin** barra final. Ej: http://190.93.188.250:8081
-  final String baseUrl;
+  static String _normalizeBase(String v) =>
+      v.trim().replaceAll(RegExp(r'/+$'), ''); // quita trailing slash
 
+  final http.Client _client;
+  final String _baseUrl; // puede ser '' en web (rutas relativas)
   String? _token;
 
-  /// Establece o elimina el token Bearer.
-  void setToken(String? token) => _token = (token == null || token.isEmpty) ? null : token;
+  void setToken(String? token) => _token = token;
 
-  /// Indica si hay token cargado.
-  bool get isAuthenticated => _token != null && _token!.isNotEmpty;
+  // ====== helpers ======
+  Uri _u(String path, [Map<String, dynamic>? q]) {
+    final p = path.startsWith('/') ? path : '/$path';
+    final qp = <String, String>{};
+    q?.forEach((k, v) {
+      if (v != null) qp[k] = v.toString();
+    });
+    // Si _baseUrl == '' => Uri relativo (ideal para Web mismo-origen)
+    final full = '$_baseUrl$p';
+    return Uri.parse(full).replace(queryParameters: qp.isEmpty ? null : qp);
+  }
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
+  Map<String, String> _jsonHeaders() => {
+        'Content-Type': 'application/json; charset=utf-8',
         'Accept': 'application/json',
         if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
       };
 
-  Uri _u(String path) => Uri.parse('$baseUrl$path');
+  Map<String, String> _formHeaders() => {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+      };
 
-  // ----------------- Utils -----------------
-  dynamic _decode(http.Response r) {
-    if (r.body.isEmpty) return null;
+  T _decodeOk<T>(http.Response r) {
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      throw HttpException('HTTP ${r.statusCode}: ${r.body}');
+    }
+    if (r.body.isEmpty) return (null as T);
     try {
-      return jsonDecode(r.body);
+      final decoded = json.decode(r.body);
+      return decoded as T;
     } catch (_) {
-      return r.body; // devuelve texto si no es JSON válido
+      throw const FormatException('Respuesta no es JSON válido');
     }
   }
 
-  Never _throwHttp(String where, http.Response r) {
-    final body = r.body.isEmpty ? '' : r.body;
-    if (r.statusCode == 401 || r.statusCode == 403) {
-      throw Exception('$where: ${r.statusCode} (No autenticado) $body');
+  Future<T> _wrap<T>(Future<http.Response> f) async {
+    try {
+      final r = await f.timeout(const Duration(seconds: 20));
+      return _decodeOk<T>(r);
+    } on TimeoutException {
+      throw const SocketException('Tiempo de espera agotado');
+    } on http.ClientException catch (e) {
+      // Mensaje amigable típico de CORS/mixed-content/host inaccesible en Web
+      throw Exception('No se pudo conectar (${e.message}). '
+          'Verifica que el backend esté accesible y CORS habilitado.');
+    } on SocketException {
+      throw const SocketException('No hay conexión con el servidor');
     }
-    throw Exception('$where: ${r.statusCode} $body');
   }
 
-  // ----------------- Ping -----------------
-  Future<bool> ping() async {
-    final r = await http.get(_u('/'));
-    return r.statusCode >= 200 && r.statusCode < 300;
+  // ========== Utils ==========
+  Future<Map<String, dynamic>> ping() async {
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.get(_u('/'), headers: _jsonHeaders()),
+    );
+    return r;
   }
 
-  // ----------------- Auth -----------------
-  /// Registro básico. Devuelve el JSON que responda tu backend.
+  // ========== Auth ==========
   Future<Map<String, dynamic>> register(Map<String, dynamic> body) async {
-    final r = await http.post(_u('/auth/register'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('register', r);
-    return Map<String, dynamic>.from(_decode(r) ?? {});
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.post(_u('/auth/register'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return r;
   }
 
-  /// Login; intenta extraer el token con claves comunes. Guarda el token en memoria.
-  /// Devuelve el JSON de respuesta para que el UI pueda usar otros campos si quiere.
   Future<Map<String, dynamic>> login({
     required String usernameOrEmail,
     required String password,
   }) async {
-    final body = {
-      'username': usernameOrEmail,
-      'email': usernameOrEmail,
-      'password': password,
-    };
-    final r = await http.post(_u('/auth/login'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('login', r);
-
-    final Map<String, dynamic> data = Map<String, dynamic>.from(_decode(r) ?? {});
-    final token = _pickToken(data);
-    if (token != null && token.isNotEmpty) {
-      setToken(token);
-    }
-    return data;
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.post(
+        _u('/auth/login'),
+        headers: _formHeaders(),
+        body: {'username': usernameOrEmail, 'password': password},
+      ),
+    );
+    return r;
   }
 
-  /// Limpia el token en memoria (no llama endpoint).
-  void logout() => setToken(null);
-
-  /// Intenta encontrar un token en el JSON (access_token, token, data.token, etc.)
-  String? _pickToken(Map<String, dynamic> json) {
-    if (json['access_token'] is String) return json['access_token'] as String;
-    if (json['token'] is String) return json['token'] as String;
-    final data = json['data'];
-    if (data is Map && data['token'] is String) return data['token'] as String;
-    return null;
-  }
-
-  // ================== Clientes ==================
+  // ========== Clientes ==========
   Future<List<dynamic>> listClientes({String? search}) async {
-    final uri = (search == null || search.isEmpty)
-        ? _u('/clientes')
-        : _u('/clientes?search=${Uri.encodeQueryComponent(search)}');
-
-    final r = await http.get(uri, headers: _headers);
-    if (r.statusCode != 200) _throwHttp('listClientes', r);
-
-    final data = _decode(r);
-    if (data is List) return data;
-    if (data is Map && data['items'] is List) return data['items'];
-    return <dynamic>[];
+    final r = await _wrap<dynamic>(
+      _client.get(
+        _u('/clientes', (search == null || search.trim().isEmpty) ? null : {'search': search}),
+        headers: _jsonHeaders(),
+      ),
+    );
+    if (r is List) return r;
+    throw Exception('Respuesta inesperada en /clientes');
   }
 
   Future<Map<String, dynamic>> createCliente(Map<String, dynamic> body) async {
-    final r = await http.post(_u('/clientes'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('createCliente', r);
-    return Map<String, dynamic>.from(_decode(r) ?? {});
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.post(_u('/clientes'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return r;
   }
 
   Future<Map<String, dynamic>> updateCliente(int id, Map<String, dynamic> body) async {
-    final r = await http.put(_u('/clientes/$id'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('updateCliente', r);
-    return Map<String, dynamic>.from(_decode(r) ?? {});
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.put(_u('/clientes/$id'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return r;
   }
 
   Future<void> deleteCliente(int id) async {
-    final r = await http.delete(_u('/clientes/$id'), headers: _headers);
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('deleteCliente', r);
+    await _wrap<dynamic>(
+      _client.delete(_u('/clientes/$id'), headers: _jsonHeaders()),
+    );
   }
 
-  // ================== Préstamos ==================
+  // ========== Préstamos ==========
   Future<List<dynamic>> listPrestamos() async {
-    final r = await http.get(_u('/prestamos'), headers: _headers);
-    if (r.statusCode != 200) _throwHttp('listPrestamos', r);
+    final r = await _wrap<dynamic>(
+      _client.get(_u('/prestamos'), headers: _jsonHeaders()),
+    );
+    if (r is List) return r;
+    throw Exception('Respuesta inesperada en /prestamos');
+  }
 
-    final data = _decode(r);
-    if (data is List) return data;
-    if (data is Map && data['items'] is List) return data['items'];
-    return <dynamic>[];
+  Future<Map<String, dynamic>?> getPrestamo(int id) async {
+    final r = await _wrap<dynamic>(
+      _client.get(_u('/prestamos/$id'), headers: _jsonHeaders()),
+    );
+    if (r == null) return null;
+    return Map<String, dynamic>.from(r as Map);
   }
 
   Future<Map<String, dynamic>> createPrestamo(Map<String, dynamic> body) async {
-    final r = await http.post(_u('/prestamos'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('createPrestamo', r);
-    return Map<String, dynamic>.from(_decode(r) ?? {});
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.post(_u('/prestamos'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return r;
   }
 
   Future<Map<String, dynamic>> updatePrestamo(int id, Map<String, dynamic> body) async {
-    final r = await http.put(_u('/prestamos/$id'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('updatePrestamo', r);
-    return Map<String, dynamic>.from(_decode(r) ?? {});
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.put(_u('/prestamos/$id'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return r;
   }
 
   Future<void> deletePrestamo(int id) async {
-    final r = await http.delete(_u('/prestamos/$id'), headers: _headers);
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('deletePrestamo', r);
+    await _wrap<dynamic>(
+      _client.delete(_u('/prestamos/$id'), headers: _jsonHeaders()),
+    );
   }
 
-  // ================== Pagos ==================
+  // ========== Pagos ==========
   Future<List<dynamic>> listPagosDePrestamo(int prestamoId) async {
-    final r = await http.get(_u('/prestamos/$prestamoId/pagos'), headers: _headers);
-    if (r.statusCode != 200) _throwHttp('listPagosDePrestamo', r);
-
-    final data = _decode(r);
-    if (data is List) return data;
-    if (data is Map && data['items'] is List) return data['items'];
-    return <dynamic>[];
+    final r = await _wrap<dynamic>(
+      _client.get(_u('/prestamos/$prestamoId/pagos'), headers: _jsonHeaders()),
+    );
+    if (r is List) return r;
+    throw Exception('Respuesta inesperada en /prestamos/{id}/pagos');
   }
 
   Future<Map<String, dynamic>> createPago(Map<String, dynamic> body) async {
-    final r = await http.post(_u('/pagos'), headers: _headers, body: jsonEncode(body));
-    if (r.statusCode < 200 || r.statusCode >= 300) _throwHttp('createPago', r);
-    return Map<String, dynamic>.from(_decode(r) ?? {});
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.post(_u('/pagos'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return r;
   }
+
+  Future<void> deletePago(int id) async {
+    await _wrap<dynamic>(
+      _client.delete(_u('/pagos/$id'), headers: _jsonHeaders()),
+    );
+  }
+
+  // ========== Dashboard ==========
+  Future<Map<String, dynamic>> dashboard({required int year, required int month}) async {
+    final r = await _wrap<Map<String, dynamic>>(
+      _client.get(_u('/dashboard', {'year': year, 'month': month}), headers: _jsonHeaders()),
+    );
+    return r;
+  }
+
+  void close() => _client.close();
 }

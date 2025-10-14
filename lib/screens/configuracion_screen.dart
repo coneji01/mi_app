@@ -1,7 +1,6 @@
-// lib/screens/configuracion_screen.dart
 import 'package:flutter/material.dart';
 import '../services/settings.dart';
-import '../data/repository.dart';
+import '../widgets/app_drawer.dart'; // ✅ Drawer
 
 class ConfiguracionScreen extends StatelessWidget {
   const ConfiguracionScreen({super.key});
@@ -9,36 +8,24 @@ class ConfiguracionScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = Settings.instance;
-    final urlCtrl = TextEditingController(text: s.backendUrl);
 
     return FutureBuilder(
       future: s.ensureInitialized(),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return Scaffold(
-            appBar: AppBar(
-              title: const Text('Configuración'),
-              leading: _backButton(context),
-            ),
+            appBar: AppBar(title: const Text('Configuración')),
+            drawer: const AppDrawer(current: AppSection.configuracion),
             body: const Center(child: CircularProgressIndicator()),
           );
         }
 
-        // Sincroniza Repository con lo guardado actualmente
-        if (s.backendUrl.isNotEmpty) {
-          Repository.i.setBaseUrl(s.backendUrl);
-        }
-
         return Scaffold(
-          appBar: AppBar(
-            title: const Text('Configuración'),
-            leading: _backButton(context),
-          ),
+          appBar: AppBar(title: const Text('Configuración')),
+          drawer: const AppDrawer(current: AppSection.configuracion),
           body: AnimatedBuilder(
             animation: s,
             builder: (context, _) {
-              urlCtrl.text = s.backendUrl; // mantener actualizado el campo
-
               return ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
@@ -47,6 +34,8 @@ class ConfiguracionScreen extends StatelessWidget {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 12),
+
+                  // ===== Datos personales
                   _card(
                     context,
                     title: 'Datos personales',
@@ -58,7 +47,10 @@ class ConfiguracionScreen extends StatelessWidget {
                       _sw('Dependientes', s.showDependientes, s.setShowDependientes),
                     ],
                   ),
+
                   const SizedBox(height: 12),
+
+                  // ===== Actividad económica
                   _card(
                     context,
                     title: 'Actividad económica',
@@ -67,7 +59,10 @@ class ConfiguracionScreen extends StatelessWidget {
                       _sw('Ingresos mensuales', s.showIngresos, s.setShowIngresos),
                     ],
                   ),
+
                   const SizedBox(height: 12),
+
+                  // ===== Trabajo
                   _card(
                     context,
                     title: 'Trabajo',
@@ -81,73 +76,23 @@ class ConfiguracionScreen extends StatelessWidget {
 
                   const SizedBox(height: 24),
                   const Divider(height: 32),
-                  const Text(
-                    'Conexión con el servidor (Backend)',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 12),
 
+                  // Información del backend fijo (solo lectura)
                   Card(
                     elevation: 1,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        children: [
-                          TextFormField(
-                            controller: urlCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'URL del backend',
-                              hintText: 'Ej: http://190.93.188.250:8081',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.link),
-                            ),
-                            keyboardType: TextInputType.url,
-                            onChanged: (v) {
-                              // No guardamos aún; guardamos cuando pase el ping.
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: ElevatedButton.icon(
-                                  onPressed: () async {
-                                    final raw = urlCtrl.text.trim();
-                                    if (raw.isEmpty) {
-                                      _snack(context, 'Coloca la URL del backend');
-                                      return;
-                                    }
-                                    // Ajuste para no dejar barra final
-                                    final url = raw.replaceAll(RegExp(r'/+$'), '');
-                                    Repository.i.setBaseUrl(url);
-                                    try {
-                                      final ok = await Repository.i.probarConexion();
-                                      if (ok) {
-                                        await s.setBackendUrl(url); // guardamos SOLO si responde
-                                        _snack(context, '✔ Conectado al backend y guardado', ok: true);
-                                      } else {
-                                        _snack(context, '✖ El servidor no respondió (200..299 esperado)');
-                                      }
-                                    } catch (e) {
-                                      _snack(context, '✖ Error de conexión: $e');
-                                    }
-                                  },
-                                  icon: const Icon(Icons.wifi_tethering),
-                                  label: const Text('Probar conexión'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                    child: ListTile(
+                      leading: const Icon(Icons.cloud_done),
+                      title: const Text('Servidor de backend'),
+                      subtitle: Text(
+                        // Sólo informativo, ya no editable
+                        s.backendUrl.isEmpty
+                            ? 'URL fija embebida en la app'
+                            : s.backendUrl,
                       ),
+                      trailing: const Icon(Icons.lock, size: 18),
                     ),
                   ),
 
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Los cambios se guardan automáticamente (la URL se guarda al pasar la prueba).',
-                    style: TextStyle(color: Colors.grey),
-                  ),
                   const SizedBox(height: 32),
                 ],
               );
@@ -184,28 +129,6 @@ class ConfiguracionScreen extends StatelessWidget {
       title: Text(label),
       value: value,
       onChanged: (v) => setter(v),
-    );
-  }
-
-  Widget _backButton(BuildContext context) {
-    // Si puede volver, muestra back; si no, muestra un botón Home que te lleve a '/'
-    if (Navigator.canPop(context)) {
-      return IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop());
-    }
-    return IconButton(
-      icon: const Icon(Icons.home),
-      onPressed: () => Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false),
-      tooltip: 'Ir al inicio',
-    );
-  }
-
-  void _snack(BuildContext context, String msg, {bool ok = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: ok ? Colors.green : null,
-        duration: const Duration(seconds: 2),
-      ),
     );
   }
 }

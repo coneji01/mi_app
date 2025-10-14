@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import '../routes/nav.dart';
 import '../widgets/app_drawer.dart';
-import '../data/repository.dart'; // Solo backend
+import '../data/repository.dart';
 
 class PrestamosScreen extends StatefulWidget {
   const PrestamosScreen({super.key});
@@ -14,6 +14,9 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
   List<Map<String, dynamic>> _all = [];
   bool _loading = true;
   String? _error;
+
+  // Cache de nombres por id de cliente
+  final Map<int, String> _clientesById = {};
 
   // Paginación local
   final List<int> _pageSizes = const [10, 15, 25, 50];
@@ -28,7 +31,26 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
 
   Future<void> _load() async {
     try {
-      final rows = await Repository.i.prestamos(); // ✅ ya devuelve List<Map<String,dynamic>>
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+
+      // 1) Trae préstamos
+      final rows = await Repository.i.prestamos();
+
+      // 2) Trae clientes para mapear id -> "Nombre Apellido"
+      final clientes = await Repository.i.clientes();
+      _clientesById
+        ..clear()
+        ..addEntries(clientes.map((c) {
+          final id = (c['id'] as num?)?.toInt();
+          final nombre = (c['nombre'] ?? '').toString();
+          final apellido = (c['apellido'] ?? '').toString();
+          final full = '$nombre $apellido'.trim();
+          return MapEntry(id ?? -1, full.isEmpty ? 'Cliente #$id' : full);
+        }).where((e) => e.key > 0));
+
       if (!mounted) return;
       setState(() {
         _all = rows;
@@ -88,6 +110,13 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
     return null;
   }
 
+  // ⬇️ Nuevo: convierte dinámicos a int (acepta int, num, string)
+  int? _asIntDyn(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString());
+  }
+
   double _balance(Map<String, dynamic> r) {
     return (_get<num>(r, ['balancePendiente', 'balance_pendiente'])
               ?? _get<num>(r, ['balanceCalculado'])
@@ -145,12 +174,25 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
   // ====== ITEM (tarjeta) ======
   Widget _tile(Map<String, dynamic> r) {
     final prestamoId = _get<int>(r, ['prestamoId', 'p_id', 'id']) ?? 0;
-    final nombre = '${_get<String>(r, ['clienteNombre', 'c_nombre', 'nombre']) ?? ''} '
-                   '${_get<String>(r, ['clienteApellido', 'c_apellido', 'apellido']) ?? ''}'.trim();
+
+    // Nombre por 3 vías: (a) campos embebidos, (b) cache clientes, (c) fallback
+    final cid = _get<int>(r, ['clienteId', 'cliente_id']);
+    final embedNombre = _get<String>(r, ['clienteNombre', 'c_nombre', 'nombre']) ?? '';
+    final embedApellido = _get<String>(r, ['clienteApellido', 'c_apellido', 'apellido']) ?? '';
+    String nombre = ('$embedNombre $embedApellido').trim();
+    if (nombre.isEmpty && cid != null && _clientesById.containsKey(cid)) {
+      nombre = _clientesById[cid] ?? '';
+    }
+    if (nombre.isEmpty) {
+      nombre = 'Cliente #${cid ?? '-'}';
+    }
 
     final modalidad  = _get<String>(r, ['modalidad']) ?? '—';
-    final cuotasTot  = _get<int>(r, ['cuotasTotales', 'cuotas_totales']) ?? 0;
-    final cuotasPag  = _get<int>(r, ['cuotasPagadas', 'cuotas_pagadas']) ?? 0;
+
+    // ⬇️ Usamos el conversor flexible
+    final cuotasTot  = _asIntDyn(r['cuotasTotales'] ?? r['cuotas_totales']);
+    final cuotasPag  = _asIntDyn(r['cuotasPagadas'] ?? r['cuotas_pagadas']);
+
     final balance    = _balance(r);
     final proximo    = _fmtFecha(_get<String>(r, ['proximoPago', 'proximo_pago']));
 
@@ -184,7 +226,7 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        nombre.isEmpty ? 'Cliente #${_get<int>(r, ['clienteId', 'cliente_id']) ?? '-'}' : nombre,
+                        nombre,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -212,7 +254,12 @@ class _PrestamosScreenState extends State<PrestamosScreen> {
                     children: [
                       Align(
                         alignment: Alignment.centerRight,
-                        child: Text('Cuotas $cuotasPag/$cuotasTot', style: Theme.of(context).textTheme.labelLarge),
+                        child: Text(
+                          (cuotasTot == null || cuotasPag == null)
+                              ? 'Cuotas —'
+                              : 'Cuotas $cuotasPag/$cuotasTot',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
                       ),
                       Align(
                         alignment: Alignment.centerRight,

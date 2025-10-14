@@ -1,9 +1,8 @@
+// lib/screens/nuevo_cliente_screen.dart
 import 'package:flutter/material.dart';
 import '../services/settings.dart';
-
-// 👇 Agregados para guardar en BD
-import '../data/db_service.dart';
-import '../models/cliente.dart';
+import '../data/repository.dart';
+import 'configuracion_screen.dart';
 
 class NuevoClienteScreen extends StatefulWidget {
   const NuevoClienteScreen({super.key});
@@ -15,7 +14,6 @@ class NuevoClienteScreen extends StatefulWidget {
 class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  // ==> Separados
   final _nombresCtrl = TextEditingController();
   final _apellidosCtrl = TextEditingController();
 
@@ -32,23 +30,19 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
   final _direccionTrabajoCtrl = TextEditingController();
   final _puestoTrabajoCtrl = TextEditingController();
   final _mesesTrabajandoCtrl = TextEditingController();
-  final _telefonoTrabajoCtrl = TextEditingController(); // UI solamente (no existe en BD)
+  final _telefonoTrabajoCtrl = TextEditingController(); // (solo UI)
 
   @override
   void dispose() {
     _nombresCtrl.dispose();
     _apellidosCtrl.dispose();
-
     _telefonoCtrl.dispose();
     _cedulaCtrl.dispose();
     _direccionCtrl.dispose();
-
     _empresaCtrl.dispose();
     _ingresosCtrl.dispose();
-
     _estadoCivilCtrl.dispose();
     _dependientesCtrl.dispose();
-
     _direccionTrabajoCtrl.dispose();
     _puestoTrabajoCtrl.dispose();
     _mesesTrabajandoCtrl.dispose();
@@ -247,55 +241,61 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
   }
 
   Future<void> _guardar() async {
-  if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) return;
 
-  final nowIso = DateTime.now().toIso8601String();
+    // Asegúrate de que haya URL de backend configurada
+    if (!Repository.i.isReady) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Configura primero la URL del servidor')),
+      );
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ConfiguracionScreen()),
+      );
+      return;
+    }
 
-  final cliente = Cliente(
-    // Personales (evita null en direccion)
-    nombre: _nombresCtrl.text.trim(),
-    apellido: _apellidosCtrl.text.trim(),
-    telefono: _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
-    direccion: _direccionCtrl.text.trim(), // <- siempre String, nunca null
-    cedula: _cedulaCtrl.text.trim().isEmpty ? null : _cedulaCtrl.text.trim(),
-    // sexo: ...  // <- NO enviar sexo si no tienes selector; el constructor usa su default
-    creadoEn: nowIso,
-    fotoPath: null,
+    // ====== Guardar en BACKEND (único modo) ======
+    try {
+      final body = <String, dynamic>{
+        'nombre': _nombresCtrl.text.trim(),
+        'apellido': _apellidosCtrl.text.trim().isEmpty ? null : _apellidosCtrl.text.trim(),
+        'telefono': _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
+        'cedula': _cedulaCtrl.text.trim().isEmpty ? null : _cedulaCtrl.text.trim(),
+        'direccion': _direccionCtrl.text.trim(),
+        'empresa': _empresaCtrl.text.trim().isEmpty ? null : _empresaCtrl.text.trim(),
+        'ingresos': _ingresosCtrl.text.trim().isEmpty
+            ? null
+            : double.tryParse(_ingresosCtrl.text.trim()),
+        'estado_civil': _estadoCivilCtrl.text.trim().isEmpty ? null : _estadoCivilCtrl.text.trim(),
+        'dependientes': _dependientesCtrl.text.trim().isEmpty
+            ? null
+            : int.tryParse(_dependientesCtrl.text.trim()),
+        'direccion_trabajo': _direccionTrabajoCtrl.text.trim().isEmpty
+            ? null
+            : _direccionTrabajoCtrl.text.trim(),
+        'puesto_trabajo': _puestoTrabajoCtrl.text.trim().isEmpty
+            ? null
+            : _puestoTrabajoCtrl.text.trim(),
+        'meses_trabajando': _mesesTrabajandoCtrl.text.trim().isEmpty
+            ? null
+            : int.tryParse(_mesesTrabajandoCtrl.text.trim()),
+        // 'telefono_trabajo' no existe en la API; no lo enviamos
+      };
 
-    // Laborales (opcionales)
-    empresa: _empresaCtrl.text.trim().isEmpty ? null : _empresaCtrl.text.trim(),
-    ingresos: _ingresosCtrl.text.trim().isEmpty
-        ? null
-        : double.tryParse(_ingresosCtrl.text.trim()),
-    // estadoCivil es nullable en DB (lo codificas con null-check), así que puedes dejarlo null.
-    estadoCivil: null,
-    dependientes: _dependientesCtrl.text.trim().isEmpty
-        ? null
-        : int.tryParse(_dependientesCtrl.text.trim()),
-    direccionTrabajo: _direccionTrabajoCtrl.text.trim().isEmpty
-        ? null
-        : _direccionTrabajoCtrl.text.trim(),
-    puestoTrabajo: _puestoTrabajoCtrl.text.trim().isEmpty
-        ? null
-        : _puestoTrabajoCtrl.text.trim(),
-    mesesTrabajando: _mesesTrabajandoCtrl.text.trim().isEmpty
-        ? null
-        : int.tryParse(_mesesTrabajandoCtrl.text.trim()),
-    // Ojo: telefono_trabajo no existe en la tabla v6 -> no se guarda
-  );
+      await Repository.i.crearCliente(body); // <-- usa el endpoint /clientes
 
-  try {
-    final id = await DbService.instance.insertCliente(cliente);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Cliente #$id guardado ✅')),
-    );
-    Navigator.pop(context, true); // avisa a la lista para recargar
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.toString())),
-    );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cliente guardado en servidor ✅')),
+      );
+      Navigator.pop(context, true); // avisa a la lista para recargar
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al guardar (backend): $e')),
+      );
+    }
   }
-}
 }

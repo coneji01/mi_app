@@ -1,10 +1,12 @@
 // lib/screens/agregar_pago_screen.dart
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
-import '../data/db_service.dart';
+import '../data/repository.dart';          // 👈 backend only
 import '../models/prestamo.dart';
 import '../widgets/app_drawer.dart';
+import '../data/db_service.dart';          // 👈 solo lo dejamos para leer el préstamo (no escribimos nada local)
 
 class AgregarPagoScreen extends StatefulWidget {
   final int prestamoId;
@@ -85,6 +87,8 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     });
 
     try {
+      // Leemos el préstamo desde local SOLO para mostrar info de la pantalla.
+      // (No escribimos en local en esta pantalla).
       final p = await DbService.instance.getPrestamoById(widget.prestamoId);
       if (p == null) {
         throw Exception('No existe el préstamo #${widget.prestamoId}.');
@@ -95,7 +99,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       _interesPorCuota = p.monto * (p.interes / 100.0);
       _cuotaTotal = _capitalPorCuota + _interesPorCuota;
 
-      // Cuotas restantes
+      // Cuotas restantes (usamos lo que haya localmente para orientación)
       final pagadas = p.cuotasPagadas ?? 0;
       final rest = p.cuotasTotales - pagadas;
       final restantesPos = rest <= 0 ? 1 : rest;
@@ -159,7 +163,6 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
 
   // ¿Está pendiente la cuota ABSOLUTA N?
   bool _estaPendienteAbs(int absIndex) {
-    // Convertimos la absoluta a relativa (1..restantes)
     final rel = absIndex - _primeraPendienteAbs + 1;
     final due = _soloFecha(_fechaVencCuotaRel(rel));
     final hoy = _soloFecha(DateTime.now());
@@ -223,6 +226,27 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     return 'RD\$$intPart${parts.length > 1 && parts[1] != '00' ? '.${parts[1]}' : ''}';
   }
 
+  // =================== BACKEND HELPERS ===================
+  Future<void> _crearPagoBackend({
+    required int prestamoId,
+    required double monto,
+    required String tipo,           // 'capital' | 'interes' | 'mora' | 'seguro' | 'otros' | 'gastos'
+    String? nota,
+  }) async {
+    if (monto <= 0) return;
+
+    final fechaStr = DateFormat('yyyy-MM-dd').format(_fechaPago);
+    final t = tipo.toLowerCase(); // normalizado
+
+    await Repository.i.crearPago(
+      prestamoId: prestamoId,
+      fecha: fechaStr,
+      monto: monto,
+      tipo: t,
+      nota: (nota ?? '').trim().isEmpty ? null : nota!.trim(),
+    );
+  }
+
   // =================== GUARDAR ===================
   Future<void> _guardar() async {
     if (_p == null || _saving) return;
@@ -230,12 +254,11 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     setState(() => _saving = true);
     try {
       final p = _p!;
-
       _recalcular(); // por si cambió algo al final
 
-      // 1) Registrar pagos (interés / capital / otros)
+      // 1) === Backend: crear pagos en API === (solo backend, sin SQLite)
       if (_interesAPagar > 0) {
-        await DbService.instance.agregarPagoRapido(
+        await _crearPagoBackend(
           prestamoId: p.id!,
           monto: _interesAPagar,
           tipo: 'interes',
@@ -245,7 +268,7 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
 
       final double capitalConDesc = math.max(0.0, _capitalAPagar - _descuento);
       if (capitalConDesc > 0) {
-        await DbService.instance.agregarPagoRapido(
+        await _crearPagoBackend(
           prestamoId: p.id!,
           monto: capitalConDesc,
           tipo: 'capital',
@@ -254,54 +277,29 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       }
 
       if (_otros > 0) {
-        await DbService.instance.agregarPagoRapido(
+        await _crearPagoBackend(
           prestamoId: p.id!,
           monto: _otros,
           tipo: 'otros',
-          nota: _comentarioCtrl.text.trim().isEmpty
-              ? 'Otros'
-              : _comentarioCtrl.text.trim(),
+          nota: _comentarioCtrl.text.trim().isEmpty ? 'Otros' : _comentarioCtrl.text.trim(),
         );
       }
 
-      // 2) Actualizar cuotasPagadas y proximoPago (si avanzó capital)
-      final sumarCuotas = (_modo == 'SOLO INTERÉS') ? 0 : _nCuotas;
-      if (sumarCuotas > 0) {
-        final db = await DbService.instance.database;
-
-        final pagadas = p.cuotasPagadas ?? 0;
-        final nuevasCuotas =
-            (pagadas + sumarCuotas) > p.cuotasTotales ? p.cuotasTotales : pagadas + sumarCuotas;
-
-        // Base para el avance del próximo vencimiento
-        final DateTime base = p.proximoPago ?? p.fechaInicio;
-
-        final nuevoProx =
-            _sumarPeriodos(base, p.modalidad, sumarCuotas).toIso8601String();
-
-        // OJO: ajusta nombres de columnas a tu tabla local
-        await db.update(
-          'prestamos',
-          {
-            'cuotasPagadas': nuevasCuotas,
-            'proximoPago': nuevoProx, // si usas snake_case: 'proximo_pago'
-          },
-          where: 'id = ?',
-          whereArgs: [p.id],
-        );
-      }
+      // 2) === NO escribimos en local ===
+      //    Quitamos llamadas a DbService.agregarPagoRapido y a updates de cuotas/proximoPago.
+      //    La fuente de verdad es el backend.
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pago registrado')),
+        const SnackBar(content: Text('Pago registrado en el backend')),
       );
 
-      // 🔄 Recargar para renumerar: quedarán 2, 3, 4, ...
+      // Recargar (solo para refrescar vista con datos locales disponibles)
       await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(content: Text('Error al guardar: $e')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -334,7 +332,6 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
                 )
               : _buildContent(),
 
-      // Barra inferior con Total y botones
       bottomNavigationBar: _loading || _error != null
           ? null
           : SafeArea(

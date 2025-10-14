@@ -4,14 +4,16 @@ import 'package:flutter/material.dart';
 
 import '../models/cliente.dart';
 import '../models/prestamo_propuesta.dart';
-import '../data/db_service.dart';
+
+// Backend
+import '../data/repository.dart';
 
 import 'calculadora_screen.dart';
 import 'nuevo_prestamo_screen.dart';
 import 'editar_cliente_screen.dart';
 import 'cliente_historial_screen.dart';
 
-enum _MenuAccion { nuevoPrestamo, verHistorial, editarCliente }
+enum _MenuAccion { nuevoPrestamo, verHistorial, editarCliente, eliminarCliente }
 
 class ClienteDetalleScreen extends StatefulWidget {
   final Cliente cliente;
@@ -26,8 +28,6 @@ class ClienteDetalleScreen extends StatefulWidget {
 }
 
 class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
-  final _db = DbService.instance;
-
   late Cliente _cliente;   // estado local
   bool _touched = false;   // hubo cambios
 
@@ -35,19 +35,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
   void initState() {
     super.initState();
     _cliente = widget.cliente;
-    _refreshFromDb(); // por si venimos de una lista cacheada
-  }
-
-  Future<void> _refreshFromDb() async {
-    final id = _cliente.id;
-    if (id == null) return;
-    try {
-      final fresh = await _db.getClienteById(id);
-      if (!mounted) return;
-      if (fresh != null) setState(() => _cliente = fresh);
-    } catch (_) {
-      // refresco silencioso
-    }
+    // Si más adelante expones un endpoint GET /clientes/{id}, aquí podrías refrescar.
   }
 
   String _sexoLegible(Sexo? sexo) {
@@ -75,6 +63,47 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
     );
   }
 
+  Future<void> _eliminarCliente() async {
+    if (_cliente.id == null) return;
+
+    final nombre = '${_cliente.nombre ?? ''} ${_cliente.apellido ?? ''}'.trim();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar cliente'),
+        content: Text(
+          '¿Seguro que deseas eliminar a${nombre.isEmpty ? '' : ' "$nombre"'}?\n'
+          'Se borrarán también sus préstamos y pagos.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    try {
+      await Repository.i.eliminarCliente(_cliente.id!);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cliente eliminado')),
+      );
+      // Volvemos a la lista pidiendo que recargue
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al eliminar: $e')),
+      );
+    }
+  }
+
   Future<void> _onAccionSeleccionada(BuildContext context, _MenuAccion a) async {
     switch (a) {
       case _MenuAccion.nuevoPrestamo:
@@ -86,7 +115,6 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
           return;
         }
 
-        // 1) Obtenemos propuesta desde calculadora (en modo retorno)
         final propuesta = await Navigator.of(context).push<PrestamoPropuesta>(
           MaterialPageRoute(
             builder: (_) => const CalculadoraScreen(returnMode: true),
@@ -94,7 +122,6 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
         );
         if (!context.mounted || propuesta == null) return;
 
-        // 2) Abrimos la pantalla de nuevo préstamo con cliente + propuesta
         await Navigator.of(context).push<void>(
           MaterialPageRoute(
             builder: (_) => NuevoPrestamoScreen(
@@ -133,9 +160,12 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             _touched = true;
           });
         } else if (result == true) {
-          await _refreshFromDb();
-          _touched = true;
+          _touched = true; // editado; que la lista recargue al volver
         }
+        break;
+
+      case _MenuAccion.eliminarCliente:
+        await _eliminarCliente();
         break;
     }
   }
@@ -187,6 +217,16 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             ],
           ),
         ),
+        PopupMenuItem(
+          value: _MenuAccion.eliminarCliente,
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Eliminar cliente'),
+            ],
+          ),
+        ),
       ],
     );
 
@@ -209,7 +249,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
         if (_touched) {
-          Navigator.of(context).pop(_cliente);
+          Navigator.of(context).pop(true); // indica recarga
         } else {
           Navigator.of(context).pop();
         }
@@ -218,11 +258,6 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
         appBar: AppBar(
           title: const Text('Detalle del Cliente'),
           actions: [
-            IconButton(
-              tooltip: 'Refrescar',
-              icon: const Icon(Icons.refresh),
-              onPressed: _refreshFromDb,
-            ),
             PopupMenuButton<_MenuAccion>(
               onSelected: (a) => _onAccionSeleccionada(context, a),
               itemBuilder: (context) => const [
@@ -256,6 +291,16 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
                     ],
                   ),
                 ),
+                PopupMenuItem(
+                  value: _MenuAccion.eliminarCliente,
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Eliminar cliente'),
+                    ],
+                  ),
+                ),
               ],
             ),
           ],
@@ -267,7 +312,6 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Row(
               children: [
-                // Botón principal: ancho, azul (usa tu theme), texto en mayúsculas
                 Expanded(
                   child: ElevatedButton.icon(
                     icon: const Icon(Icons.add),
@@ -290,7 +334,6 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Botón flecha (menú desplegable) estilo split-button
                 SizedBox(
                   width: 48,
                   height: 48,
@@ -345,7 +388,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
             const Divider(),
             ListTile(
               leading: const Icon(Icons.calendar_today),
-              title: Text(_cliente.creadoEn ?? '—'), // <- null-safe
+              title: Text(_cliente.creadoEn ?? '—'),
               subtitle: const Text('Creado en (ISO-8601)'),
             ),
           ],

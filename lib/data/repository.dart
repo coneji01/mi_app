@@ -1,80 +1,65 @@
 // lib/data/repository.dart
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
+
 import '../services/api_client.dart';
 import '../services/settings.dart';
 
-/// Repositorio SOLO backend.
-/// Centraliza la instancia de ApiClient y expone métodos usados por las pantallas.
 class Repository with ChangeNotifier {
   Repository._();
   static final Repository i = Repository._();
 
   ApiClient? _api;
   String _baseUrl = '';
-  String? _authToken; // bearer opcional
+  String? _authToken;
 
-  /// ¿Hay URL válida e instancia de cliente?
-  bool get isReady => _api != null && _baseUrl.isNotEmpty;
-
-  /// ¿Hay token cargado?
+  bool get isReady => _api != null;
   bool get isAuthenticated => (_authToken != null && _authToken!.isNotEmpty);
-
   String get baseUrl => _baseUrl;
 
-  /// Inicializa leyendo Settings (puedes sobreescribir con parámetros).
   Future<void> init({String? baseUrl, String? authToken}) async {
     final s = Settings.instance;
     await s.ensureInitialized();
 
-    _baseUrl = (baseUrl ?? s.backendUrl).trim().replaceAll(RegExp(r'/+$'), '');
     _authToken = (authToken ?? s.authToken)?.trim();
 
-    if (_baseUrl.isEmpty) {
+    if (kIsWeb) {
+      // 👉 Web: MISMO ORIGEN (cuando sirves la web en /app desde FastAPI).
+      // Ejemplo de origen: http://TU_IP:8081
+      // Las requests irán a /auth/login, /clientes, etc. sin CORS.
+      _baseUrl = '';
+    } else {
+      // 👉 Móvil / Desktop: usa argumento o Settings (p.ej. http://TU_IP:8081)
+      final fromArg = (baseUrl ?? '').trim();
+      final fromSettings = s.backendUrl.trim();
+      _baseUrl = (fromArg.isNotEmpty ? fromArg : fromSettings)
+          .replaceAll(RegExp(r'/+$'), '');
+    }
+
+    if (!kIsWeb && _baseUrl.isEmpty) {
       _api = null;
       notifyListeners();
       return;
     }
+
     _api = ApiClient(_baseUrl, token: _authToken);
     notifyListeners();
   }
 
-  /// Cambia la URL base en caliente (lo usa ConfiguracionScreen).
-  void setBaseUrl(String url) {
-    final cleaned = url.trim().replaceAll(RegExp(r'/+$'), '');
-    _baseUrl = cleaned;
-    if (cleaned.isEmpty) {
-      _api = null;
-    } else {
-      _api = ApiClient(cleaned, token: _authToken);
-    }
-    notifyListeners();
-  }
-
-  /// Establece (o borra) el token y lo persiste en Settings.
   Future<void> setAuthToken(String? token) async {
     final t = (token == null || token.isEmpty) ? null : token.trim();
     _authToken = t;
     _api?.setToken(t);
-    await Settings.instance.setAuthToken(t ?? '');
+    await Settings.instance.setAuthToken(t);
     notifyListeners();
   }
 
-  /// Prueba rápida de conexión (GET /). Devuelve true si 200..299.
-  Future<bool> probarConexion() async {
-    if (_api == null) return false;
-    return _api!.ping();
-  }
-
-  // ================== Auth ==================
-
-  /// Registro simple; devuelve el JSON del backend.
+  // ===== Auth
   Future<Map<String, dynamic>> register(Map<String, dynamic> body) async {
     _ensureReady();
     final res = await _api!.register(body);
     return Map<String, dynamic>.from(res);
   }
 
-  /// Login; extrae token de la respuesta y lo guarda.
   Future<Map<String, dynamic>> login({
     required String usernameOrEmail,
     required String password,
@@ -84,8 +69,6 @@ class Repository with ChangeNotifier {
       usernameOrEmail: usernameOrEmail,
       password: password,
     );
-
-    // Intenta recoger token para persistirlo.
     final token = (res['access_token'] ??
         res['token'] ??
         (res['data'] is Map ? res['data']['token'] : null));
@@ -95,23 +78,40 @@ class Repository with ChangeNotifier {
     return Map<String, dynamic>.from(res);
   }
 
-  /// Elimina el token en memoria y en Settings.
   Future<void> logout() => setAuthToken(null);
 
-  // ================== Endpoints usados por la app ==================
-
-  // ---- Clientes ----
+  // ===== Clientes
   Future<List<Map<String, dynamic>>> clientes({String? search}) async {
     _ensureReady();
     final l = await _api!.listClientes(search: search);
     return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  // ---- Préstamos ----
+  Future<Map<String, dynamic>> crearCliente(Map<String, dynamic> body) async {
+    _ensureReady();
+    final m = await _api!.createCliente(body);
+    return Map<String, dynamic>.from(m);
+  }
+
+  Future<void> eliminarCliente(int id) async {
+    _ensureReady();
+    await _api!.deleteCliente(id);
+  }
+
+  Future<void> deleteCliente(int id) => eliminarCliente(id);
+
+  // ===== Préstamos
   Future<List<Map<String, dynamic>>> prestamos() async {
     _ensureReady();
     final l = await _api!.listPrestamos();
     return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<Map<String, dynamic>?> prestamoPorId(int id) async {
+    _ensureReady();
+    final m = await _api!.getPrestamo(id);
+    if (m == null) return null;
+    return Map<String, dynamic>.from(m);
   }
 
   Future<Map<String, dynamic>> crearPrestamo(Map<String, dynamic> body) async {
@@ -120,19 +120,69 @@ class Repository with ChangeNotifier {
     return Map<String, dynamic>.from(m);
   }
 
-  // ---- Pagos ----
-  Future<Map<String, dynamic>> crearPago(Map<String, dynamic> body) async {
+  Future<void> eliminarPrestamo(int id) async {
+    _ensureReady();
+    await _api!.deletePrestamo(id);
+  }
+
+  Future<void> deletePrestamo(int id) => eliminarPrestamo(id);
+
+  // ===== Pagos
+  Future<Map<String, dynamic>> crearPagoRaw(Map<String, dynamic> body) async {
     _ensureReady();
     final m = await _api!.createPago(body);
     return Map<String, dynamic>.from(m);
   }
 
-  // ----------------- Helpers -----------------
+  Future<Map<String, dynamic>> crearPago({
+    required int prestamoId,
+    required String fecha,
+    required double monto,
+    required String tipo,
+    String? nota,
+    double? otros,
+    double? descuento,
+  }) async {
+    _ensureReady();
+    final body = <String, dynamic>{
+      "prestamo_id": prestamoId,
+      "fecha": fecha,
+      "monto": monto,
+      "tipo": tipo,
+      if (nota != null && nota.trim().isNotEmpty) "nota": nota.trim(),
+      if (otros != null) "otros": otros,
+      if (descuento != null) "descuento": descuento,
+    };
+    final m = await _api!.createPago(body);
+    return Map<String, dynamic>.from(m);
+  }
+
+  Future<List<Map<String, dynamic>>> pagosDePrestamo(int prestamoId) async {
+    _ensureReady();
+    final l = await _api!.listPagosDePrestamo(prestamoId);
+    return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<void> eliminarPago(int id) async {
+    _ensureReady();
+    await _api!.deletePago(id);
+  }
+
+  Future<void> deletePago(int id) => eliminarPago(id);
+
+  // ===== Dashboard
+  Future<Map<String, dynamic>> dashboard({
+    required int year,
+    required int month,
+  }) async {
+    _ensureReady();
+    final res = await _api!.dashboard(year: year, month: month);
+    return Map<String, dynamic>.from(res);
+  }
+
   void _ensureReady() {
     if (_api == null) {
-      throw StateError(
-        'Repository no inicializado. Configura la URL del backend en Configuración.',
-      );
+      throw StateError('Repository no inicializado.');
     }
   }
 }

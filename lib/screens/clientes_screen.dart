@@ -1,12 +1,10 @@
-// lib/screens/clientes_screen.dart
 import 'package:flutter/material.dart';
 import '../widgets/app_drawer.dart';
 import '../models/cliente.dart';
 import 'nuevo_cliente_screen.dart';
-import 'package:mi_app/screens/cliente_detalle_screen.dart'; // <-- deja este o el relativo, no ambos
-
-// 🔄 Nuevo: repositorio que conmuta Local (SQLite) / Backend
+import 'cliente_detalle_screen.dart';
 import '../data/repository.dart';
+import '../../main.dart' show routeObserver; // <-- importa el observer
 
 class ClientesScreen extends StatefulWidget {
   const ClientesScreen({super.key});
@@ -14,12 +12,11 @@ class ClientesScreen extends StatefulWidget {
   State<ClientesScreen> createState() => _ClientesScreenState();
 }
 
-class _ClientesScreenState extends State<ClientesScreen> {
+class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
   List<Cliente> _clientes = [];
   bool _cargando = true;
   String? _error;
 
-  // normaliza: recorta y convierte null -> ''
   String _nn(String? s) => s?.trim() ?? '';
 
   @override
@@ -28,14 +25,38 @@ class _ClientesScreenState extends State<ClientesScreen> {
     _cargar();
   }
 
+  // Suscribirse al RouteObserver
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  // Desuscribir
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  // Llamado cuando otra pantalla se cierra y esta vuelve a ser visible
+  @override
+  void didPopNext() {
+    // por si volvemos sin resultado (por botón back, etc.)
+    _cargar();
+  }
+
   Future<void> _cargar() async {
+    setState(() {
+      _cargando = true;
+      _error = null;
+    });
     try {
       final data = await _fetchClientesDesdeRepositorio();
       if (!mounted) return;
       setState(() {
         _clientes = data;
         _cargando = false;
-        _error = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -46,19 +67,12 @@ class _ClientesScreenState extends State<ClientesScreen> {
     }
   }
 
-  /// Obtiene clientes desde Repository (que puede ser local o backend).
-  /// Soporta dos escenarios:
-  /// 1) El repo devuelve List<Cliente>.
-  /// 2) El repo devuelve List<Map<String,dynamic>> y aquí lo convertimos con Cliente.fromMap.
   Future<List<Cliente>> _fetchClientesDesdeRepositorio() async {
-    final dynamic any = await Repository.i.clientes(); // puede ser List<Cliente> o List<Map>
-    if (any is List<Cliente>) {
-      return any;
-    }
+    final dynamic any = await Repository.i.clientes();
+    if (any is List<Cliente>) return any;
     if (any is List) {
       return any.map<Cliente>((e) {
         if (e is Cliente) return e;
-        // Intentamos convertir a Map para fromMap:
         final m = Map<String, dynamic>.from(e as Map);
         return Cliente.fromMap(m);
       }).toList();
@@ -71,15 +85,19 @@ class _ClientesScreenState extends State<ClientesScreen> {
       MaterialPageRoute(builder: (_) => const NuevoClienteScreen()),
     );
     if (creado == true) {
-      setState(() => _cargando = true);
+      // si la pantalla hija avisó “true”, recargamos
       await _cargar();
     }
   }
 
-  void _irDetalle(Cliente c) {
-    Navigator.of(context).push(
+  void _irDetalle(Cliente c) async {
+    final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(builder: (_) => ClienteDetalleScreen(cliente: c)),
     );
+    if (changed == true) {
+      // si editar/eliminar devolvió true, recargamos
+      await _cargar();
+    }
   }
 
   @override
