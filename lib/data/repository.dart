@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 
 import '../services/api_client.dart';
 import '../services/settings.dart';
+import '../models/cliente.dart';
 
 class Repository with ChangeNotifier {
   Repository._();
@@ -23,12 +24,9 @@ class Repository with ChangeNotifier {
     _authToken = (authToken ?? s.authToken)?.trim();
 
     if (kIsWeb) {
-      // 👉 Web: MISMO ORIGEN (cuando sirves la web en /app desde FastAPI).
-      // Ejemplo de origen: http://TU_IP:8081
-      // Las requests irán a /auth/login, /clientes, etc. sin CORS.
-      _baseUrl = '';
+      // Web (pruebas): apunta a tu backend público
+      _baseUrl = 'http://190.93.188.250:8081';
     } else {
-      // 👉 Móvil / Desktop: usa argumento o Settings (p.ej. http://TU_IP:8081)
       final fromArg = (baseUrl ?? '').trim();
       final fromSettings = s.backendUrl.trim();
       _baseUrl = (fromArg.isNotEmpty ? fromArg : fromSettings)
@@ -90,6 +88,27 @@ class Repository with ChangeNotifier {
   Future<Map<String, dynamic>> crearCliente(Map<String, dynamic> body) async {
     _ensureReady();
     final m = await _api!.createCliente(body);
+    return Map<String, dynamic>.from(m);
+  }
+
+  /// Actualizar cliente en el backend usando el modelo
+  Future<Cliente> updateCliente(Cliente c) async {
+    _ensureReady();
+    if (c.id == null) {
+      throw ArgumentError('Cliente.id es null: no se puede actualizar sin ID.');
+    }
+    final payload = c.toJson();
+    final m = await _api!.updateCliente(c.id!, payload); // 👈 non-null
+    return Cliente.fromJson(Map<String, dynamic>.from(m));
+  }
+
+  /// Versión raw por si quieres pasar un Map directo
+  Future<Map<String, dynamic>> updateClienteRaw(int? id, Map<String, dynamic> body) async {
+    _ensureReady();
+    if (id == null) {
+      throw ArgumentError('id es null: no se puede actualizar sin ID.');
+    }
+    final m = await _api!.updateCliente(id, body);
     return Map<String, dynamic>.from(m);
   }
 

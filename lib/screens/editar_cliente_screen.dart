@@ -1,7 +1,7 @@
 // lib/screens/editar_cliente_screen.dart
 import 'package:flutter/material.dart';
 
-import '../data/db_service.dart';
+import '../data/repository.dart';
 import '../models/cliente.dart';
 
 class EditarClienteScreen extends StatefulWidget {
@@ -23,16 +23,16 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
   late final TextEditingController _cedulaCtrl;
   late final TextEditingController _direccionCtrl;
   late final TextEditingController _telefonoCtrl;
-  late Sexo _sexo; // no nulo en UI
+  late Sexo _sexo;
 
   // --------- Datos laborales ---------
   late final TextEditingController _empresaCtrl;
-  late final TextEditingController _ingresosCtrl;     // double opcional
-  late final TextEditingController _dependientesCtrl; // int opcional
+  late final TextEditingController _ingresosCtrl;
+  late final TextEditingController _dependientesCtrl;
   late final TextEditingController _dirTrabajoCtrl;
   late final TextEditingController _puestoCtrl;
-  late final TextEditingController _mesesTrabCtrl;    // int opcional
-  late EstadoCivil _estadoCivil;                      // no nulo en UI
+  late final TextEditingController _mesesTrabCtrl;
+  late EstadoCivil _estadoCivil;
 
   @override
   void initState() {
@@ -45,7 +45,7 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
     _cedulaCtrl    = TextEditingController(text: c.cedula ?? '');
     _direccionCtrl = TextEditingController(text: c.direccion);
     _telefonoCtrl  = TextEditingController(text: c.telefono ?? '');
-    _sexo          = c.sexo ?? Sexo.otro; // <-- FIX: da default si viene null
+    _sexo          = c.sexo ?? Sexo.otro;
 
     // Laborales
     _empresaCtrl      = TextEditingController(text: c.empresa ?? '');
@@ -64,7 +64,6 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
     _cedulaCtrl.dispose();
     _direccionCtrl.dispose();
     _telefonoCtrl.dispose();
-
     _empresaCtrl.dispose();
     _ingresosCtrl.dispose();
     _dependientesCtrl.dispose();
@@ -77,6 +76,15 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
   // ----------------- Validaciones -----------------
   String? _req(String? v) =>
       (v == null || v.trim().isEmpty) ? 'Requerido' : null;
+
+  String _normCedula(String v) => v.replaceAll(RegExp(r'\D'), '');
+
+  String? _cedulaOk(String? v) {
+    if (v == null || v.trim().isEmpty) return null; // opcional
+    final d = _normCedula(v);
+    if (d.length != 11) return 'Cédula inválida (11 dígitos)';
+    return null;
+  }
 
   String? _optNumEntero(String? v) {
     if (v == null || v.trim().isEmpty) return null;
@@ -95,13 +103,6 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
     };
   }
 
-  String? _cedulaOk(String? v) {
-    if (v == null || v.trim().isEmpty) return null; // opcional
-    final d = v.replaceAll(RegExp(r'\D'), '');
-    if (d.length != 11) return 'Cédula inválida (11 dígitos)';
-    return null;
-  }
-
   InputDecoration _dec(String label, {IconData? icon, String? hint}) => InputDecoration(
         labelText: label,
         hintText: hint,
@@ -114,7 +115,7 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
         child: Text(text, style: Theme.of(context).textTheme.titleMedium),
       );
 
-  // ----------------- Guardar -----------------
+  // ----------------- Guardar (usa BACKEND) -----------------
   Future<void> _guardar() async {
     if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
@@ -122,20 +123,17 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
     setState(() => _saving = true);
 
     try {
-      final cedulaNorm = DbService.normalizeCedula(_cedulaCtrl.text);
-
       final updated = Cliente(
         id: widget.cliente.id,
         // Personales
         nombre: _nombreCtrl.text.trim(),
         apellido: _apellidoCtrl.text.trim(),
-        cedula: cedulaNorm,
-        sexo: _sexo, // no nulo
+        cedula: _normCedula(_cedulaCtrl.text),
+        sexo: _sexo,
         direccion: _direccionCtrl.text.trim(),
         telefono: _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
         creadoEn: widget.cliente.creadoEn,
         fotoPath: widget.cliente.fotoPath,
-
         // Laborales
         empresa: _empresaCtrl.text.trim().isEmpty ? null : _empresaCtrl.text.trim(),
         ingresos: _ingresosCtrl.text.trim().isEmpty
@@ -156,14 +154,15 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
             : int.tryParse(_mesesTrabCtrl.text.trim()),
       );
 
-      await DbService.instance.updateCliente(updated);
+      // 👇 GUARDA EN BACKEND (no en SQLite local)
+      final saved = await Repository.i.updateCliente(updated);
 
       if (!mounted) return;
-      Navigator.pop(context, updated);
+      Navigator.pop(context, saved);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al guardar: $e')),
+        SnackBar(content: Text('Error al guardar en backend: $e')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -180,7 +179,6 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // ===== Datos personales =====
             _sectionTitle('Datos personales'),
             TextFormField(
               controller: _nombreCtrl,
@@ -232,7 +230,6 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
               validator: _req,
             ),
 
-            // ===== Datos laborales =====
             _sectionTitle('Datos laborales'),
             TextFormField(
               controller: _empresaCtrl,
