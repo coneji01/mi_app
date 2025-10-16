@@ -64,12 +64,14 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
     }
 
     if (!mounted) return;
+    final resolvedData = data;
+    if (resolvedData == null) return;
     setState(() {
-      _prestamo = data!.prestamo;
-      _paso = data!.paso;
-      _inicio = data!.inicio;
-      _cuotas = data!.cuotas;
-      _pagosTodos = data!.pagosTodos;
+      _prestamo = resolvedData.prestamo;
+      _paso = resolvedData.paso;
+      _inicio = resolvedData.inicio;
+      _cuotas = resolvedData.cuotas;
+      _pagosTodos = resolvedData.pagosTodos;
       _loading = false;
       _error = null;
     });
@@ -241,6 +243,15 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   String _money(num n) => 'RD\$${n.toStringAsFixed(2)}';
 
+  String _descripcionPaso(Duration paso) {
+    final dias = paso.inDays;
+    if (dias == 7) return 'semanal (cada 7 días)';
+    if (dias == 14) return 'quincenal (cada 14 días)';
+    if (dias >= 28 && dias <= 31) return 'mensual (cada $dias días)';
+    if (dias == 1) return 'diaria (cada 1 día)';
+    return 'cada $dias días';
+  }
+
   // “Píldoras” visuales para claridad
   Widget _pill(String text, Color color, {Color? bg}) {
     return Container(
@@ -276,6 +287,16 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
 
     // mostrar % correctamente (interes es fracción, p.ej. 0.1 -> 10.00%)
     final interesPct = (_prestamo!.interes * 100).toStringAsFixed(2);
+    final frecuencia = _descripcionPaso(_paso);
+
+    String ultimoMovimiento = '—';
+    for (final pago in _pagosTodos.reversed) {
+      final fecha = pago.fecha;
+      if (fecha != null) {
+        ultimoMovimiento = _d(fecha);
+        break;
+      }
+    }
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -287,8 +308,18 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
             title: Text(_money(_prestamo!.monto)),
             subtitle: Text(
               'Interés: $interesPct% • ${_prestamo!.modalidad}\n'
-              'Inicio: ${_inicio != null ? _d(_inicio!) : '—'} • Cuotas: ${_prestamo!.cuotasTotales}',
+              'Inicio: ${_inicio != null ? _d(_inicio!) : '—'} • Cuotas: ${_prestamo!.cuotasTotales}\n'
+              'Frecuencia: $frecuencia',
             ),
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.history),
+            title: Text('Pagos registrados: ${_pagosTodos.length}'),
+            subtitle: Text('Último movimiento: $ultimoMovimiento'),
           ),
         ),
         const SizedBox(height: 8),
