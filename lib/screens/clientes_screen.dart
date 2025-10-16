@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../widgets/app_drawer.dart';
 import '../models/cliente.dart';
@@ -13,15 +15,20 @@ class ClientesScreen extends StatefulWidget {
 }
 
 class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
+  final TextEditingController _searchController = TextEditingController();
   List<Cliente> _clientes = [];
+  List<Cliente> _clientesFiltrados = [];
   bool _cargando = true;
   String? _error;
+  int _pageSize = 20;
+  final List<int> _pageSizeOptions = const [10, 15, 20, 50];
 
   String _nn(String? s) => s?.trim() ?? '';
 
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(_aplicarFiltros);
     _cargar();
   }
 
@@ -36,6 +43,8 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
+    _searchController.removeListener(_aplicarFiltros);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -57,6 +66,7 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
       setState(() {
         _clientes = data;
         _cargando = false;
+        _clientesFiltrados = _filtrarClientes(data, _searchController.text);
       });
     } catch (e) {
       if (!mounted) return;
@@ -78,6 +88,96 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
       }).toList();
     }
     return <Cliente>[];
+  }
+
+  void _aplicarFiltros() {
+    if (!mounted) return;
+    final term = _searchController.text;
+    setState(() {
+      _clientesFiltrados = _filtrarClientes(_clientes, term);
+    });
+  }
+
+  List<Cliente> _filtrarClientes(List<Cliente> source, String term) {
+    final q = term.trim().toLowerCase();
+    if (q.isEmpty) return List<Cliente>.from(source);
+    return source.where((cliente) {
+      final valores = [
+        cliente.nombre,
+        cliente.apellido,
+        cliente.cedula,
+        cliente.telefono,
+        cliente.direccion,
+      ]
+          .whereType<String>()
+          .map((e) => e.toLowerCase());
+      return valores.any((valor) => valor.contains(q));
+    }).toList();
+  }
+
+  Widget _buildFiltros(BuildContext context) {
+    final filtros = <Widget>[
+      TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          labelText: 'Buscar cliente',
+          hintText: 'Nombre, apellido, cédula o teléfono',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _searchController.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Limpiar búsqueda',
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _searchController.clear();
+                    _aplicarFiltros();
+                  },
+                ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Row(
+        children: [
+          const Text('Mostrar:'),
+          const SizedBox(width: 8),
+          DropdownButton<int>(
+            value: _pageSize,
+            items: _pageSizeOptions
+                .map(
+                  (cantidad) => DropdownMenuItem<int>(
+                    value: cantidad,
+                    child: Text('$cantidad'),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null || value == _pageSize) return;
+              setState(() {
+                _pageSize = value;
+              });
+            },
+          ),
+          const SizedBox(width: 4),
+          const Text('clientes'),
+          const Spacer(),
+          Text(
+            _clientesFiltrados.isEmpty
+                ? 'Sin coincidencias'
+                : 'Mostrando ${math.min(_clientesFiltrados.length, _pageSize)} de ${_clientesFiltrados.length}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: filtros,
+      ),
+    );
   }
 
   Future<void> _irNuevoCliente() async {
@@ -117,31 +217,47 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
                   padding: const EdgeInsets.all(12),
                   child: Text('Error: $_error'),
                 )
-              : _clientes.isEmpty
-                  ? const Center(child: Text('Sin clientes'))
-                  : ListView.separated(
-                      itemCount: _clientes.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (_, i) {
-                        final c = _clientes[i];
-                        final titulo = [_nn(c.nombre), _nn(c.apellido)]
-                            .where((s) => s.isNotEmpty)
-                            .join(' ');
-                        final subtituloSrc = _nn(c.telefono).isNotEmpty
-                            ? _nn(c.telefono)
-                            : _nn(c.direccion);
-                        return ListTile(
-                          title: Text(titulo.isEmpty ? 'Sin nombre' : titulo),
-                          subtitle: subtituloSrc.isEmpty ? null : Text(subtituloSrc),
-                          onTap: () => _irDetalle(c),
-                        );
-                      },
+              : Column(
+                  children: [
+                    _buildFiltros(context),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: _clientes.isEmpty
+                          ? const Center(child: Text('Sin clientes'))
+                          : _clientesFiltrados.isEmpty
+                              ? const Center(child: Text('Sin coincidencias'))
+                              : _buildListaClientes(),
                     ),
+                  ],
+                ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _irNuevoCliente,
         label: const Text('Nuevo'),
         icon: const Icon(Icons.person_add_alt_1),
       ),
+    );
+  }
+
+  Widget _buildListaClientes() {
+    final limite = math.min(_clientesFiltrados.length, _pageSize);
+    final visibles = _clientesFiltrados.take(limite).toList();
+    return ListView.separated(
+      itemCount: visibles.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final c = visibles[i];
+        final titulo = [_nn(c.nombre), _nn(c.apellido)]
+            .where((s) => s.isNotEmpty)
+            .join(' ');
+        final subtituloSrc = _nn(c.telefono).isNotEmpty
+            ? _nn(c.telefono)
+            : _nn(c.direccion);
+        return ListTile(
+          title: Text(titulo.isEmpty ? 'Sin nombre' : titulo),
+          subtitle: subtituloSrc.isEmpty ? null : Text(subtituloSrc),
+          onTap: () => _irDetalle(c),
+        );
+      },
     );
   }
 }

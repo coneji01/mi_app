@@ -1,7 +1,8 @@
 // lib/screens/prestamo_historial_screen.dart
 import 'package:flutter/material.dart';
-import '../data/db_service.dart';
+import '../data/repository.dart';
 import '../models/prestamo.dart';
+import '../models/prestamo_api_adapter.dart';
 
 class PrestamoHistorialScreen extends StatefulWidget {
   final int prestamoId;
@@ -12,7 +13,7 @@ class PrestamoHistorialScreen extends StatefulWidget {
 }
 
 class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
-  final _db = DbService.instance;
+  final _repo = Repository.i;
 
   bool _loading = true;
   String? _error;
@@ -31,10 +32,13 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
 
   Future<void> _cargar() async {
     try {
-      final p = await _db.getPrestamoById(widget.prestamoId);
-      if (p == null) throw Exception('Préstamo ${widget.prestamoId} no encontrado');
+      final rawPrestamo = await _repo.prestamoPorId(widget.prestamoId);
+      if (rawPrestamo == null) {
+        throw Exception('Préstamo ${widget.prestamoId} no encontrado en el backend');
+      }
+      final p = prestamoFromApiMap(rawPrestamo);
 
-      final rows = await _db.listarPagosDePrestamo(widget.prestamoId);
+      final rows = await _repo.pagosDePrestamo(widget.prestamoId);
 
       // --------- Setup de modalidad/fecha inicio ----------
       _prestamo = p;
@@ -43,11 +47,12 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
 
       // --------- Transformar todos los pagos a lista tipada ----------
       _pagosTodos = rows.map((r) {
-        final fechaIso = (r['fecha'] as String?) ?? '';
-        final fecha = DateTime.tryParse(fechaIso);
-        final monto = (r['monto'] as num?)?.toDouble() ?? 0.0;
-        final nota = (r['nota'] as String?) ?? '';
-        return _PagoRow(fecha: fecha, monto: monto, nota: nota);
+        final fechaRaw = r['fecha'] ?? r['fecha_pago'] ?? r['fechaPago'] ?? r['created_at'];
+        final fecha = _asDate(fechaRaw);
+        final monto = _asDouble(r['monto'] ?? r['cantidad'] ?? r['monto_pagado']);
+        final nota = _pickNota(r);
+        final tipo = _pickTipo(r);
+        return _PagoRow(fecha: fecha, monto: monto, nota: nota, tipo: tipo);
       }).toList()
         ..sort((a, b) {
           final ad = a.fecha ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -56,7 +61,7 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
         });
 
       // --------- Filtrar pagos de CAPITAL y calcular atraso por cuota ----------
-      final capitales = _pagosTodos.where((x) => _tag(x.nota) == 'capital').toList();
+      final capitales = _pagosTodos.where((x) => _tag(x) == 'capital').toList();
       _cuotas = [];
       for (var i = 0; i < capitales.length; i++) {
         final k = i + 1; // cuota #1, #2, …
@@ -100,6 +105,10 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
   DateTime? _asDate(dynamic v) {
     if (v == null) return null;
     if (v is DateTime) return v;
+    if (v is num) {
+      final millis = v > 2000000000 ? v.toInt() : (v * 1000).toInt();
+      return DateTime.fromMillisecondsSinceEpoch(millis);
+    }
     if (v is String) {
       final s = v.trim();
       if (s.isEmpty) return null;
@@ -113,6 +122,41 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
     return null;
   }
 
+  double _asDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      final s = v.trim();
+      if (s.isEmpty) return 0.0;
+      final normalized = s.replaceAll(RegExp(r'[^0-9,.-]'), '').replaceAll(',', '.');
+      return double.tryParse(normalized) ?? 0.0;
+    }
+    return 0.0;
+  }
+
+  String _pickNota(Map<String, dynamic> row) {
+    for (final key in ['nota', 'descripcion', 'detalle', 'comentario', 'observacion']) {
+      final v = row[key];
+      if (v != null) {
+        final s = v.toString().trim();
+        if (s.isNotEmpty) return s;
+      }
+    }
+    final tipo = _pickTipo(row);
+    return tipo.isNotEmpty ? tipo : '';
+  }
+
+  String _pickTipo(Map<String, dynamic> row) {
+    for (final key in ['tipo', 'tipo_pago', 'tipoPago', 'categoria', 'tag']) {
+      final v = row[key];
+      if (v != null) {
+        final s = v.toString().trim();
+        if (s.isNotEmpty) return s;
+      }
+    }
+    return '';
+  }
+
   Duration _pasoPorModalidad(String? modalidad) {
     final m = (modalidad ?? '').toLowerCase();
     if (m.contains('seman')) return const Duration(days: 7);
@@ -120,10 +164,14 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
     return const Duration(days: 14); // quincenal por defecto
   }
 
-  String _tag(String? nota) {
-    if (nota == null) return 'otros';
+  String _tag(_PagoRow pago) {
+    final nota = pago.nota;
     final m = RegExp(r'^\s*\[([^\]]+)\]').firstMatch(nota);
-    return (m?.group(1) ?? 'otros').toLowerCase();
+    final noteTag = (m?.group(1) ?? '').toLowerCase();
+    if (noteTag.isNotEmpty) return noteTag;
+    final tipo = (pago.tipo ?? '').toLowerCase();
+    if (tipo.isNotEmpty) return tipo;
+    return 'otros';
   }
 
   String _d(DateTime d) =>
@@ -248,7 +296,8 @@ class _PagoRow {
   final DateTime? fecha;
   final double monto;
   final String nota;
-  _PagoRow({required this.fecha, required this.monto, required this.nota});
+  final String? tipo;
+  _PagoRow({required this.fecha, required this.monto, required this.nota, this.tipo});
 }
 
 class _CuotaPago {

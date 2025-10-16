@@ -1,7 +1,6 @@
 // lib/screens/prestamo_detalle_screen.dart
 import 'package:flutter/material.dart';
 
-import '../data/db_service.dart';
 import '../models/prestamo.dart';
 import '../widgets/app_drawer.dart';
 import 'agregar_pago_screen.dart';
@@ -24,8 +23,6 @@ class PrestamoDetalleScreen extends StatefulWidget {
 }
 
 class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
-  final _db = DbService.instance;
-
   Prestamo? _prestamo;
   List<Map<String, dynamic>> _pagos = [];
   bool _loading = true;
@@ -57,14 +54,17 @@ class _PrestamoDetalleScreenState extends State<PrestamoDetalleScreen> {
         throw Exception('ID de préstamo inválido.');
       }
 
-      final prestamo = await _db.getPrestamoById(id);
-      if (prestamo == null) throw Exception('No existe el préstamo #$id.');
-      final pagos = await _db.listarPagosDePrestamo(id);
+      final prestamoMap = await Repository.i.prestamoPorId(id);
+      if (prestamoMap == null) throw Exception('No existe el préstamo #$id.');
+      final prestamo = Prestamo.fromJson(prestamoMap);
+      final pagos = await Repository.i.pagosDePrestamo(id);
 
       if (!mounted) return;
       setState(() {
         _prestamo = prestamo;
-        _pagos = pagos;
+        _pagos = pagos
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList(growable: false);
         _loading = false;
       });
     } catch (e) {
