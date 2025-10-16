@@ -47,6 +47,59 @@ class ApiClient {
         if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
       };
 
+  List<dynamic> _listFromResponse(dynamic data) {
+    if (data is List) return data;
+    if (data is Map<String, dynamic>) {
+      for (final key in const [
+        'data',
+        'results',
+        'items',
+        'rows',
+        'values',
+        'solicitudes',
+        'pagos',
+        'prestamos',
+      ]) {
+        final val = data[key];
+        if (val is List) return val;
+      }
+    } else if (data is Map) {
+      for (final key in const [
+        'data',
+        'results',
+        'items',
+        'rows',
+        'values',
+        'solicitudes',
+        'pagos',
+        'prestamos',
+      ]) {
+        final val = data[key];
+        if (val is List) return List<dynamic>.from(val);
+      }
+    }
+    throw Exception('Respuesta inesperada: se esperaba una lista JSON.');
+  }
+
+  Map<String, dynamic> _mapFromResponse(dynamic data) {
+    if (data is Map<String, dynamic>) {
+      final inner = data['data'] ?? data['result'] ?? data['payload'];
+      if (inner is Map<String, dynamic>) return Map<String, dynamic>.from(inner);
+      if (inner is Map) return Map<String, dynamic>.from(inner.map((k, v) => MapEntry(k.toString(), v)));
+      return Map<String, dynamic>.from(data);
+    }
+    if (data is Map) {
+      final map = Map<String, dynamic>.from(data.map((k, v) => MapEntry(k.toString(), v)));
+      final inner = map['data'] ?? map['result'] ?? map['payload'];
+      if (inner is Map<String, dynamic>) return Map<String, dynamic>.from(inner);
+      if (inner is Map) {
+        return Map<String, dynamic>.from(inner.map((k, v) => MapEntry(k.toString(), v)));
+      }
+      return map;
+    }
+    throw Exception('Respuesta inesperada: se esperaba un objeto JSON.');
+  }
+
   T _decodeOk<T>(http.Response r) {
     if (r.statusCode < 200 || r.statusCode >= 300) {
       throw HttpException('HTTP ${r.statusCode}: ${r.body}');
@@ -147,11 +200,18 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>?> getPrestamo(int id) async {
-    final r = await _wrap<dynamic>(
-      _client.get(_u('/prestamos/$id'), headers: _jsonHeaders()),
-    );
-    if (r == null) return null;
-    return Map<String, dynamic>.from(r as Map);
+    try {
+      final r = await _wrap<dynamic>(
+        _client.get(_u('/prestamos/$id'), headers: _jsonHeaders()),
+      );
+      if (r == null) return null;
+      return Map<String, dynamic>.from(r as Map);
+    } on HttpException catch (e) {
+      if (e.message.startsWith('HTTP 404')) {
+        return null; // no existe en backend → permite fallback local
+      }
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> createPrestamo(Map<String, dynamic> body) async {
@@ -176,11 +236,18 @@ class ApiClient {
 
   // ========== Pagos ==========
   Future<List<dynamic>> listPagosDePrestamo(int prestamoId) async {
-    final r = await _wrap<dynamic>(
-      _client.get(_u('/prestamos/$prestamoId/pagos'), headers: _jsonHeaders()),
-    );
-    if (r is List) return r;
-    throw Exception('Respuesta inesperada en /prestamos/{id}/pagos');
+    try {
+      final r = await _wrap<dynamic>(
+        _client.get(_u('/prestamos/$prestamoId/pagos'), headers: _jsonHeaders()),
+      );
+      if (r is List) return r;
+      throw Exception('Respuesta inesperada en /prestamos/{id}/pagos');
+    } on HttpException catch (e) {
+      if (e.message.startsWith('HTTP 404')) {
+        return const []; // si no hay préstamo, devolvemos lista vacía
+      }
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> createPago(Map<String, dynamic> body) async {
@@ -194,6 +261,39 @@ class ApiClient {
     await _wrap<dynamic>(
       _client.delete(_u('/pagos/$id'), headers: _jsonHeaders()),
     );
+  }
+
+  /// Pagos agrupados (capital + interés) con nombre del cliente.
+  Future<List<dynamic>> listPagosResumen({bool detalle = false}) async {
+    final query = detalle ? {'detalle': '1'} : null;
+    final r = await _wrap<dynamic>(
+      _client.get(_u('/pagos/resumen', query), headers: _jsonHeaders()),
+    );
+    return _listFromResponse(r);
+  }
+
+  /// Préstamos asociados a un cliente específico.
+  Future<List<dynamic>> listPrestamosDeCliente(int clienteId) async {
+    final r = await _wrap<dynamic>(
+      _client.get(_u('/clientes/$clienteId/prestamos'), headers: _jsonHeaders()),
+    );
+    return _listFromResponse(r);
+  }
+
+  /// Listado de solicitudes de préstamo generadas desde el formulario web.
+  Future<List<dynamic>> listSolicitudes() async {
+    final r = await _wrap<dynamic>(
+      _client.get(_u('/solicitudes'), headers: _jsonHeaders()),
+    );
+    return _listFromResponse(r);
+  }
+
+  /// Crear una nueva solicitud desde la app (genera enlace en el backend).
+  Future<Map<String, dynamic>> createSolicitud(Map<String, dynamic> body) async {
+    final r = await _wrap<dynamic>(
+      _client.post(_u('/solicitudes'), headers: _jsonHeaders(), body: json.encode(body)),
+    );
+    return _mapFromResponse(r);
   }
 
   // ========== Dashboard ==========

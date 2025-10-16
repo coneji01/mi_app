@@ -3,10 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../data/repository.dart';          // 👈 backend only
+import '../data/repository.dart'; // 👈 backend only
 import '../models/prestamo.dart';
 import '../widgets/app_drawer.dart';
-import '../data/db_service.dart';          // 👈 solo lo dejamos para leer el préstamo (no escribimos nada local)
 
 class AgregarPagoScreen extends StatefulWidget {
   final int prestamoId;
@@ -87,12 +86,11 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
     });
 
     try {
-      // Leemos el préstamo desde local SOLO para mostrar info de la pantalla.
-      // (No escribimos en local en esta pantalla).
-      final p = await DbService.instance.getPrestamoById(widget.prestamoId);
-      if (p == null) {
+      final prestamoMap = await Repository.i.prestamoPorId(widget.prestamoId);
+      if (prestamoMap == null) {
         throw Exception('No existe el préstamo #${widget.prestamoId}.');
       }
+      final p = Prestamo.fromJson(prestamoMap);
 
       // Base simple: capital/periodo + interés/periodo
       _capitalPorCuota = p.monto / p.cuotasTotales;
@@ -286,15 +284,14 @@ class _AgregarPagoScreenState extends State<AgregarPagoScreen> {
       }
 
       // 2) === NO escribimos en local ===
-      //    Quitamos llamadas a DbService.agregarPagoRapido y a updates de cuotas/proximoPago.
-      //    La fuente de verdad es el backend.
+      //    Toda la actualización de balances vive en el backend.
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pago registrado en el backend')),
       );
 
-      // Recargar (solo para refrescar vista con datos locales disponibles)
+      // Recargar datos desde el backend para reflejar los cambios más recientes
       await _load();
     } catch (e) {
       if (!mounted) return;

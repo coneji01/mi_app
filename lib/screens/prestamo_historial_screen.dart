@@ -1,5 +1,6 @@
 // lib/screens/prestamo_historial_screen.dart
 import 'package:flutter/material.dart';
+import '../data/db_service.dart';
 import '../data/repository.dart';
 import '../models/prestamo.dart';
 import '../models/prestamo_api_adapter.dart';
@@ -31,72 +32,134 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
   }
 
   Future<void> _cargar() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    _HistorialData? data;
+
     try {
-      final rawPrestamo = await _repo.prestamoPorId(widget.prestamoId);
-      if (rawPrestamo == null) {
-        throw Exception('Préstamo ${widget.prestamoId} no encontrado en el backend');
-      }
-      final p = prestamoFromApiMap(rawPrestamo);
-
-      final rows = await _repo.pagosDePrestamo(widget.prestamoId);
-
-      // --------- Setup de modalidad/fecha inicio ----------
-      _prestamo = p;
-      _paso = _pasoPorModalidad(p.modalidad);
-      _inicio = _asDate(p.fechaInicio); // <- acepta DateTime o String
-
-      // --------- Transformar todos los pagos a lista tipada ----------
-      _pagosTodos = rows.map((r) {
-        final fechaRaw = r['fecha'] ?? r['fecha_pago'] ?? r['fechaPago'] ?? r['created_at'];
-        final fecha = _asDate(fechaRaw);
-        final monto = _asDouble(r['monto'] ?? r['cantidad'] ?? r['monto_pagado']);
-        final nota = _pickNota(r);
-        final tipo = _pickTipo(r);
-        return _PagoRow(fecha: fecha, monto: monto, nota: nota, tipo: tipo);
-      }).toList()
-        ..sort((a, b) {
-          final ad = a.fecha ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bd = b.fecha ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return ad.compareTo(bd);
-        });
-
-      // --------- Filtrar pagos de CAPITAL y calcular atraso por cuota ----------
-      final capitales = _pagosTodos.where((x) => _tag(x) == 'capital').toList();
-      _cuotas = [];
-      for (var i = 0; i < capitales.length; i++) {
-        final k = i + 1; // cuota #1, #2, …
-        final pago = capitales[i];
-        final fechaPago = pago.fecha;
-
-        DateTime? venc;
-        if (_inicio != null) {
-          venc = _inicio!.add(Duration(days: _paso.inDays * k));
-        }
-
-        int atraso = 0;
-        if (fechaPago != null && venc != null) {
-          atraso = fechaPago.difference(venc).inDays;
-          if (atraso < 0) atraso = 0;
-        }
-
-        _cuotas.add(_CuotaPago(
-          numero: k,
-          fechaPago: fechaPago,
-          montoCapital: pago.monto,
-          vencimiento: venc,
-          diasAtraso: atraso,
-        ));
-      }
-
-      if (!mounted) return;
-      setState(() => _loading = false);
+      data = await _cargarDesdeBackend();
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      if (!_esNotFoundError(e)) {
+        _setError(e);
+        return;
+      }
     }
+
+    if (data == null) {
+      try {
+        data = await _cargarDesdeLocal();
+      } catch (e) {
+        _setError(e);
+        return;
+      }
+    }
+
+    if (data == null) {
+      _setError('El préstamo ${widget.prestamoId} no está disponible en el backend ni en la base local.');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _prestamo = data!.prestamo;
+      _paso = data!.paso;
+      _inicio = data!.inicio;
+      _cuotas = data!.cuotas;
+      _pagosTodos = data!.pagosTodos;
+      _loading = false;
+      _error = null;
+    });
+  }
+
+  Future<_HistorialData?> _cargarDesdeBackend() async {
+    final rawPrestamo = await _repo.prestamoPorId(widget.prestamoId);
+    if (rawPrestamo == null) {
+      return null;
+    }
+    final prestamo = prestamoFromApiMap(rawPrestamo);
+    final rows = await _repo.pagosDePrestamo(widget.prestamoId);
+    return _procesar(prestamo, rows);
+  }
+
+  Future<_HistorialData?> _cargarDesdeLocal() async {
+    final local = await DbService.instance.getPrestamoById(widget.prestamoId);
+    if (local == null) {
+      return null;
+    }
+    final rows = await DbService.instance.listarPagosDePrestamo(widget.prestamoId);
+    final normalizados = rows.map((m) => Map<String, dynamic>.from(m)).toList();
+    return _procesar(local, normalizados);
+  }
+
+  _HistorialData _procesar(Prestamo prestamo, List<Map<String, dynamic>> rows) {
+    final paso = _pasoPorModalidad(prestamo.modalidad);
+    final inicio = _asDate(prestamo.fechaInicio);
+
+    final pagosTodos = rows.map((r) {
+      final fechaRaw = r['fecha'] ?? r['fecha_pago'] ?? r['fechaPago'] ?? r['created_at'];
+      final fecha = _asDate(fechaRaw);
+      final monto = _asDouble(r['monto'] ?? r['cantidad'] ?? r['monto_pagado']);
+      final nota = _pickNota(r);
+      final tipo = _pickTipo(r);
+      return _PagoRow(fecha: fecha, monto: monto, nota: nota, tipo: tipo);
+    }).toList()
+      ..sort((a, b) {
+        final ad = a.fecha ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bd = b.fecha ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return ad.compareTo(bd);
+      });
+
+    final capitales = pagosTodos.where((x) => _tag(x) == 'capital').toList();
+    final cuotas = <_CuotaPago>[];
+    for (var i = 0; i < capitales.length; i++) {
+      final k = i + 1;
+      final pago = capitales[i];
+      final fechaPago = pago.fecha;
+
+      DateTime? vencimiento;
+      if (inicio != null) {
+        vencimiento = inicio.add(Duration(days: paso.inDays * k));
+      }
+
+      var atraso = 0;
+      if (fechaPago != null && vencimiento != null) {
+        atraso = fechaPago.difference(vencimiento).inDays;
+        if (atraso < 0) atraso = 0;
+      }
+
+      cuotas.add(_CuotaPago(
+        numero: k,
+        fechaPago: fechaPago,
+        montoCapital: pago.monto,
+        vencimiento: vencimiento,
+        diasAtraso: atraso,
+      ));
+    }
+
+    return _HistorialData(
+      prestamo: prestamo,
+      paso: paso,
+      inicio: inicio,
+      cuotas: cuotas,
+      pagosTodos: pagosTodos,
+    );
+  }
+
+  bool _esNotFoundError(Object error) {
+    final msg = error.toString();
+    return msg.contains('HTTP 404');
+  }
+
+  void _setError(Object error) {
+    if (!mounted) return;
+    setState(() {
+      _error = error.toString();
+      _loading = false;
+    });
   }
 
   // ===== Helpers =====
@@ -292,6 +355,21 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
 }
 
 // ===== Tipos internos =====
+class _HistorialData {
+  final Prestamo prestamo;
+  final Duration paso;
+  final DateTime? inicio;
+  final List<_CuotaPago> cuotas;
+  final List<_PagoRow> pagosTodos;
+  const _HistorialData({
+    required this.prestamo,
+    required this.paso,
+    required this.inicio,
+    required this.cuotas,
+    required this.pagosTodos,
+  });
+}
+
 class _PagoRow {
   final DateTime? fecha;
   final double monto;

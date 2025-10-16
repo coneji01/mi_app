@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import '../data/db_service.dart';
-import '../data/db_service_ext.dart';
+import '../data/repository.dart';
 import 'prestamo_historial_screen.dart';
 
 class ClienteHistorialScreen extends StatefulWidget {
@@ -18,7 +17,7 @@ class ClienteHistorialScreen extends StatefulWidget {
 }
 
 class _ClienteHistorialScreenState extends State<ClienteHistorialScreen> {
-  final _db = DbService.instance;
+  final _repo = Repository.i;
 
   bool _loading = true;
   String? _error;
@@ -32,7 +31,7 @@ class _ClienteHistorialScreenState extends State<ClienteHistorialScreen> {
 
   Future<void> _cargar() async {
     try {
-      final rows = await _db.getPrestamosByCliente(widget.clienteId);
+      final rows = await _repo.prestamosPorCliente(widget.clienteId);
       if (!mounted) return;
       setState(() {
         _prestamos = rows;

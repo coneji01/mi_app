@@ -189,6 +189,40 @@ class Repository with ChangeNotifier {
 
   Future<void> deletePago(int id) => eliminarPago(id);
 
+  Future<List<Map<String, dynamic>>> pagosResumen({bool detalle = false}) async {
+    _ensureReady();
+    final l = await _api!.listPagosResumen(detalle: detalle);
+    return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> prestamosPorCliente(int clienteId) async {
+    _ensureReady();
+    final l = await _api!.listPrestamosDeCliente(clienteId);
+    return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> solicitudes() async {
+    _ensureReady();
+    final l = await _api!.listSolicitudes();
+    return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<Map<String, dynamic>> crearSolicitud({
+    String? nombre,
+    String? telefono,
+  }) async {
+    _ensureReady();
+    final body = <String, dynamic>{};
+    if (nombre != null && nombre.trim().isNotEmpty) {
+      body['nombre'] = nombre.trim();
+    }
+    if (telefono != null && telefono.trim().isNotEmpty) {
+      body['telefono'] = telefono.trim();
+    }
+    final m = await _api!.createSolicitud(body);
+    return Map<String, dynamic>.from(m);
+  }
+
   // ===== Dashboard
   Future<Map<String, dynamic>> dashboard({
     required int year,

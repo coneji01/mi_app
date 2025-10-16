@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../widgets/app_drawer.dart';
-import '../data/db_service.dart';
+import '../data/repository.dart';
 import '../models/pago_vista.dart';
 
 class PagosScreen extends StatefulWidget {
@@ -13,7 +13,7 @@ class PagosScreen extends StatefulWidget {
 }
 
 class _PagosScreenState extends State<PagosScreen> {
-  final _db = DbService.instance;
+  final _repo = Repository.i;
 
   List<PagoVista> _pagos = [];
   bool _cargando = true;
@@ -32,7 +32,10 @@ class _PagosScreenState extends State<PagosScreen> {
     });
     try {
       // Siempre agrupado (capital + interés sumados por cliente/préstamo/día)
-      final data = await _db.listarPagosConCliente();
+      final raw = await _repo.pagosResumen();
+      final data = raw
+          .map((e) => PagoVista.fromMap(Map<String, dynamic>.from(e)))
+          .toList();
       if (!mounted) return;
       setState(() {
         _pagos = data;

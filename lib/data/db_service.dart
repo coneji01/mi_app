@@ -1,7 +1,8 @@
 // lib/data/db_service.dart
 import 'dart:math';
-import 'package:sqflite/sqflite.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../db_init.dart';
 
@@ -32,87 +33,92 @@ class DbService {
   // ────────────────── Inicialización ──────────────────
   Future<Database> _initDb() async {
     await initDbFactory();
-    final path = join(await getDatabasesPath(), 'mi_app.db');
-    return openDatabase(
+
+    final factory = databaseFactory;
+    final basePath = await factory.getDatabasesPath();
+    final path = kIsWeb ? 'mi_app.db' : join(basePath, 'mi_app.db');
+
+    return factory.openDatabase(
       path,
-      version: 7, // ⬅️ v7 agrega columna 'estado' en prestamos
-      onConfigure: (db) async {
-        await db.execute('PRAGMA foreign_keys = ON;');
-      },
-      onCreate: (db, version) async {
-        // CLIENTES (con campos laborales)
-        await db.execute('''
-          CREATE TABLE clientes (
-            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre             TEXT,
-            apellido           TEXT,
-            telefono           TEXT,
-            direccion          TEXT,
-            cedula             TEXT,
-            sexo               TEXT,
-            creado_en          TEXT,
-            foto_path          TEXT,
+      options: OpenDatabaseOptions(
+        version: 7, // ⬅️ v7 agrega columna 'estado' en prestamos
+        onConfigure: (db) async {
+          await db.execute('PRAGMA foreign_keys = ON;');
+        },
+        onCreate: (db, version) async {
+          // CLIENTES (con campos laborales)
+          await db.execute('''
+            CREATE TABLE clientes (
+              id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+              nombre             TEXT,
+              apellido           TEXT,
+              telefono           TEXT,
+              direccion          TEXT,
+              cedula             TEXT,
+              sexo               TEXT,
+              creado_en          TEXT,
+              foto_path          TEXT,
 
-            -- 👇 Campos laborales
-            empresa            TEXT,
-            ingresos           REAL,
-            estado_civil       TEXT,
-            dependientes       INTEGER,
-            direccion_trabajo  TEXT,
-            puesto_trabajo     TEXT,
-            meses_trabajando   INTEGER
-          );
-        ''');
+              -- 👇 Campos laborales
+              empresa            TEXT,
+              ingresos           REAL,
+              estado_civil       TEXT,
+              dependientes       INTEGER,
+              direccion_trabajo  TEXT,
+              puesto_trabajo     TEXT,
+              meses_trabajando   INTEGER
+            );
+          ''');
 
-        // Índice único por cédula (permite múltiples NULL)
-        await _ensureCedulaUniqueIndex(db);
+          // Índice único por cédula (permite múltiples NULL)
+          await _ensureCedulaUniqueIndex(db);
 
-        // PRESTAMOS
-        await db.execute('''
-          CREATE TABLE prestamos (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            clienteId         INTEGER NOT NULL,
-            monto             REAL    NOT NULL,
-            balancePendiente  REAL    NOT NULL,
-            totalAPagar       REAL    NOT NULL,
-            cuotasTotales     INTEGER NOT NULL,
-            cuotasPagadas     INTEGER NOT NULL,
-            interes           REAL    NOT NULL,
-            modalidad         TEXT    NOT NULL,
-            tipoAmortizacion  TEXT    NOT NULL,
-            fechaInicio       TEXT    NOT NULL,
-            proximoPago       TEXT,
-            estado            TEXT    NOT NULL DEFAULT 'Activo',
-            FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
-          );
-        ''');
+          // PRESTAMOS
+          await db.execute('''
+            CREATE TABLE prestamos (
+              id                INTEGER PRIMARY KEY AUTOINCREMENT,
+              clienteId         INTEGER NOT NULL,
+              monto             REAL    NOT NULL,
+              balancePendiente  REAL    NOT NULL,
+              totalAPagar       REAL    NOT NULL,
+              cuotasTotales     INTEGER NOT NULL,
+              cuotasPagadas     INTEGER NOT NULL,
+              interes           REAL    NOT NULL,
+              modalidad         TEXT    NOT NULL,
+              tipoAmortizacion  TEXT    NOT NULL,
+              fechaInicio       TEXT    NOT NULL,
+              proximoPago       TEXT,
+              estado            TEXT    NOT NULL DEFAULT 'Activo',
+              FOREIGN KEY (clienteId) REFERENCES clientes(id) ON DELETE CASCADE
+            );
+          ''');
 
-        // PAGOS
-        await db.execute('''
-          CREATE TABLE pagos (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            prestamoId INTEGER NOT NULL,
-            monto      REAL    NOT NULL,
-            fecha      TEXT    NOT NULL,
-            nota       TEXT,
-            FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
-          );
-        ''');
+          // PAGOS
+          await db.execute('''
+            CREATE TABLE pagos (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              prestamoId INTEGER NOT NULL,
+              monto      REAL    NOT NULL,
+              fecha      TEXT    NOT NULL,
+              nota       TEXT,
+              FOREIGN KEY (prestamoId) REFERENCES prestamos(id) ON DELETE CASCADE
+            );
+          ''');
 
-        // SOLICITUDES
-        await db.execute('''
-          CREATE TABLE solicitudes (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            leadId        TEXT    NOT NULL UNIQUE,
-            nombre        TEXT,
-            telefono      TEXT,
-            estado        TEXT    NOT NULL DEFAULT 'enviada',
-            urlFormulario TEXT    NOT NULL,
-            creadoEn      TEXT    NOT NULL
-          );
-        ''');
-      },
-      onUpgrade: (db, oldV, newV) async {
+          // SOLICITUDES
+          await db.execute('''
+            CREATE TABLE solicitudes (
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              leadId        TEXT    NOT NULL UNIQUE,
+              nombre        TEXT,
+              telefono      TEXT,
+              estado        TEXT    NOT NULL DEFAULT 'enviada',
+              urlFormulario TEXT    NOT NULL,
+              creadoEn      TEXT    NOT NULL
+            );
+          ''');
+        },
+        onUpgrade: (db, oldV, newV) async {
         // v2: recrea clientes (histórico de tu proyecto)
         if (oldV < 2) {
           await db.execute('DROP TABLE IF EXISTS clientes;');
@@ -210,7 +216,7 @@ class DbService {
             );
           } catch (_) {/* ya existía */}
         }
-      },
+      }),
     );
   }
 

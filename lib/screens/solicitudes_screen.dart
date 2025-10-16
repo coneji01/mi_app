@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../widgets/app_drawer.dart';
-import '../data/db_service.dart';
+import '../data/repository.dart';
 import '../models/solicitud.dart';
 
 class SolicitudesScreen extends StatefulWidget {
@@ -16,7 +16,7 @@ class SolicitudesScreen extends StatefulWidget {
 }
 
 class _SolicitudesScreenState extends State<SolicitudesScreen> {
-  final _db = DbService.instance;
+  final _repo = Repository.i;
   List<Solicitud> _items = [];
   bool _loading = true;
   String? _error;
@@ -33,7 +33,10 @@ class _SolicitudesScreenState extends State<SolicitudesScreen> {
       _error = null;
     });
     try {
-      final data = await _db.listarSolicitudes();
+      final raw = await _repo.solicitudes();
+      final data = raw
+          .map((e) => Solicitud.fromMap(Map<String, dynamic>.from(e)))
+          .toList();
       if (!mounted) return;
       setState(() {
         _items = data;
@@ -113,7 +116,8 @@ class _SolicitudesScreenState extends State<SolicitudesScreen> {
     final nombre = nombreCtrl.text.trim().isEmpty ? null : nombreCtrl.text.trim();
     final tel = _soloDigitos(telCtrl.text);
 
-    final s = await _db.crearSolicitud(nombre: nombre, telefono: tel);
+    final created = await _repo.crearSolicitud(nombre: nombre, telefono: tel);
+    final s = Solicitud.fromMap(created);
     if (!mounted) return;
     setState(() => _items = [s, ..._items]);
 
