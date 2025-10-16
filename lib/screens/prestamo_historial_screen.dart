@@ -1,6 +1,5 @@
 // lib/screens/prestamo_historial_screen.dart
 import 'package:flutter/material.dart';
-import '../data/db_service.dart';
 import '../data/repository.dart';
 import '../models/prestamo.dart';
 import '../models/prestamo_api_adapter.dart';
@@ -24,77 +23,57 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
   DateTime? _inicio;                 // fechaInicio del préstamo
   List<_CuotaPago> _cuotas = [];     // pagos de capital con atraso calculado
   List<_PagoRow> _pagosTodos = [];   // todos los pagos (para cálculo interno)
+  String _origen = 'Backend';        // fijo: todo viene del backend
 
   @override
   void initState() {
     super.initState();
-    _cargar();
+    _cargarSoloBackend();
   }
 
-  Future<void> _cargar() async {
+  Future<void> _cargarSoloBackend() async {
     if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
     });
 
-    _HistorialData? data;
-
     try {
-      data = await _cargarDesdeBackend();
-    } catch (e) {
-      if (!_esNotFoundError(e)) {
-        _setError(e);
+      final rawPrestamo = await _repo.prestamoPorId(widget.prestamoId);
+      if (rawPrestamo == null) {
+        _setError('Préstamo ${widget.prestamoId} no encontrado en el backend.');
         return;
       }
-    }
 
-    if (data == null) {
+      final prestamo = prestamoFromApiMap(rawPrestamo);
+
+      // Pagos del préstamo. Si el endpoint devuelve 404, lo tratamos como “sin pagos”
+      List<Map<String, dynamic>> rows;
       try {
-        data = await _cargarDesdeLocal();
+        rows = await _repo.pagosDePrestamo(widget.prestamoId);
       } catch (e) {
-        _setError(e);
-        return;
+        if (_esNotFoundError(e)) {
+          rows = <Map<String, dynamic>>[];
+        } else {
+          rethrow;
+        }
       }
-    }
 
-    if (data == null) {
-      _setError('El préstamo ${widget.prestamoId} no está disponible en el backend ni en la base local.');
-      return;
-    }
+      final data = _procesar(prestamo, rows);
 
-    if (!mounted) return;
-    final resolvedData = data;
-    if (resolvedData == null) return;
-    setState(() {
-      _prestamo = resolvedData.prestamo;
-      _paso = resolvedData.paso;
-      _inicio = resolvedData.inicio;
-      _cuotas = resolvedData.cuotas;
-      _pagosTodos = resolvedData.pagosTodos;
-      _loading = false;
-      _error = null;
-    });
-  }
-
-  Future<_HistorialData?> _cargarDesdeBackend() async {
-    final rawPrestamo = await _repo.prestamoPorId(widget.prestamoId);
-    if (rawPrestamo == null) {
-      return null;
+      if (!mounted) return;
+      setState(() {
+        _prestamo = data.prestamo;
+        _paso = data.paso;
+        _inicio = data.inicio;
+        _cuotas = data.cuotas;
+        _pagosTodos = data.pagosTodos;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      _setError(e);
     }
-    final prestamo = prestamoFromApiMap(rawPrestamo);
-    final rows = await _repo.pagosDePrestamo(widget.prestamoId);
-    return _procesar(prestamo, rows);
-  }
-
-  Future<_HistorialData?> _cargarDesdeLocal() async {
-    final local = await DbService.instance.getPrestamoById(widget.prestamoId);
-    if (local == null) {
-      return null;
-    }
-    final rows = await DbService.instance.listarPagosDePrestamo(widget.prestamoId);
-    final normalizados = rows.map((m) => Map<String, dynamic>.from(m)).toList();
-    return _procesar(local, normalizados);
   }
 
   _HistorialData _procesar(Prestamo prestamo, List<Map<String, dynamic>> rows) {
@@ -148,12 +127,15 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
       inicio: inicio,
       cuotas: cuotas,
       pagosTodos: pagosTodos,
+      origen: _origen,
     );
   }
 
   bool _esNotFoundError(Object error) {
     final msg = error.toString();
-    return msg.contains('HTTP 404');
+    return msg.contains('HTTP 404') ||
+           msg.contains('"Not Found"') ||
+           msg.contains('404 Not Found');
   }
 
   void _setError(Object error) {
@@ -166,7 +148,7 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
 
   // ===== Helpers =====
 
-  /// Acepta DateTime directo o String ISO/fecha 'YYYY-MM-DD'
+  /// Acepta DateTime directo, epoch (s o ms) o String ISO
   DateTime? _asDate(dynamic v) {
     if (v == null) return null;
     if (v is DateTime) return v;
@@ -178,10 +160,13 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
       final s = v.trim();
       if (s.isEmpty) return null;
       try {
-        // admite ISO completo o solo fecha
-        return s.length >= 10 ? DateTime.parse(s.substring(0, 10)) : DateTime.parse(s);
+        return DateTime.parse(s);
       } catch (_) {
-        return null;
+        try {
+          return DateTime.parse(s.substring(0, 10));
+        } catch (_) {
+          return null;
+        }
       }
     }
     return null;
@@ -226,7 +211,7 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
     final m = (modalidad ?? '').toLowerCase();
     if (m.contains('seman')) return const Duration(days: 7);
     if (m.contains('mens')) return const Duration(days: 30);
-    return const Duration(days: 14); // quincenal por defecto
+    return const Duration(days: 15); // quincenal alineado al backend
   }
 
   String _tag(_PagoRow pago) {
@@ -246,7 +231,7 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
   String _descripcionPaso(Duration paso) {
     final dias = paso.inDays;
     if (dias == 7) return 'semanal (cada 7 días)';
-    if (dias == 14) return 'quincenal (cada 14 días)';
+    if (dias == 15) return 'quincenal (cada 15 días)';
     if (dias >= 28 && dias <= 31) return 'mensual (cada $dias días)';
     if (dias == 1) return 'diaria (cada 1 día)';
     return 'cada $dias días';
@@ -285,7 +270,7 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
       return const Center(child: Text('Préstamo no encontrado.'));
     }
 
-    // mostrar % correctamente (interes es fracción, p.ej. 0.1 -> 10.00%)
+    // interes viene como fracción (0.10) o porcentaje (10)? Tu adapter ya lo normaliza.
     final interesPct = (_prestamo!.interes * 100).toStringAsFixed(2);
     final frecuencia = _descripcionPaso(_paso);
 
@@ -311,6 +296,7 @@ class _PrestamoHistorialScreenState extends State<PrestamoHistorialScreen> {
               'Inicio: ${_inicio != null ? _d(_inicio!) : '—'} • Cuotas: ${_prestamo!.cuotasTotales}\n'
               'Frecuencia: $frecuencia',
             ),
+            trailing: _pill('Origen: Backend', Colors.blue),
           ),
         ),
         const SizedBox(height: 8),
@@ -392,12 +378,14 @@ class _HistorialData {
   final DateTime? inicio;
   final List<_CuotaPago> cuotas;
   final List<_PagoRow> pagosTodos;
+  final String origen;
   const _HistorialData({
     required this.prestamo,
     required this.paso,
     required this.inicio,
     required this.cuotas,
     required this.pagosTodos,
+    required this.origen,
   });
 }
 
