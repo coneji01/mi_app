@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
+import '../db_init.dart';
+
 import '../models/cliente.dart';
 import '../models/prestamo.dart';
 import '../models/pago_vista.dart'; // DTO para la pantalla de Pagos
@@ -29,6 +31,7 @@ class DbService {
 
   // ────────────────── Inicialización ──────────────────
   Future<Database> _initDb() async {
+    await initDbFactory();
     final path = join(await getDatabasesPath(), 'mi_app.db');
     return openDatabase(
       path,
