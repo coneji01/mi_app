@@ -1,9 +1,6 @@
 // lib/data/repository.dart
 import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
-
-import 'package:http/http.dart' as http;
 
 import '../services/api_client.dart';
 import '../services/settings.dart';
@@ -28,7 +25,6 @@ class Repository with ChangeNotifier {
     _authToken = (authToken ?? s.authToken)?.trim();
 
     if (kIsWeb) {
-      // Web (pruebas): apunta a tu backend público
       _baseUrl = 'http://190.93.188.250:8081';
     } else {
       final fromArg = (baseUrl ?? '').trim();
@@ -91,31 +87,30 @@ class Repository with ChangeNotifier {
 
   Future<Map<String, dynamic>> crearCliente(
     Map<String, dynamic> body, {
+    // se aceptan pero se ignoran porque el backend no maneja multipart
     Uint8List? fotoBytes,
     String? fotoFilename,
   }) async {
     _ensureReady();
-    final files = (fotoBytes != null && fotoBytes.isNotEmpty)
-        ? [
-            http.MultipartFile.fromBytes(
-              'foto',
-              fotoBytes,
-              filename: fotoFilename ?? 'cliente_foto.jpg',
-            ),
-          ]
-        : null;
-    final m = await _api!.createCliente(body, files: files);
+    final m = await _api!.createCliente(body);
     return Map<String, dynamic>.from(m);
   }
 
-  /// Actualizar cliente en el backend usando el modelo
-  Future<Cliente> updateCliente(Cliente c) async {
+  /// Actualizar cliente en el backend usando el modelo (JSON puro)
+  Future<Cliente> updateCliente(
+    Cliente c, {
+    // se aceptan pero se ignoran porque el backend no maneja multipart
+    Uint8List? fotoBytes,
+    String? fotoFilename,
+  }) async {
     _ensureReady();
     if (c.id == null) {
       throw ArgumentError('Cliente.id es null: no se puede actualizar sin ID.');
     }
-    final payload = c.toJson();
-    final m = await _api!.updateCliente(c.id!, payload); // 👈 non-null
+    final payload = c.toJson()
+      ..remove('id')
+      ..remove('creado_en');
+    final m = await _api!.updateCliente(c.id!, payload);
     return Cliente.fromJson(Map<String, dynamic>.from(m));
   }
 

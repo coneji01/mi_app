@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 
 import '../widgets/app_drawer.dart';
 import '../data/repository.dart';
+import 'pagos_screen.dart';
 
 class InicioScreen extends StatefulWidget {
   const InicioScreen({super.key});
@@ -22,12 +23,15 @@ class _InicioScreenState extends State<InicioScreen> {
   ({int activos, int total})? _prestamos;
   double _totalPrestado = 0;
   double _proyInteresMes = 0;
-
+  
   // Ingreso/Egreso "legacy" del backend (mantenido por compatibilidad)
   ({double ingreso, double egreso}) _ingEg = (ingreso: 0, egreso: 0);
 
   /// mes -> rubros normalizados: capital, interes, mora, seguro, otros, gastos
   Map<int, Map<String, double>> _ingresosPorMes = {};
+
+  /// Top cuentas por cobrar que devuelve el backend
+  List<Map<String, dynamic>> _cuentasPorCobrar = const [];
 
   // Filtro por rubro (null = stacked completo)
   String? _categoriaSeleccionada;
@@ -147,6 +151,20 @@ class _InicioScreenState extends State<InicioScreen> {
         }
       }
 
+      List<Map<String, dynamic>> cuentas = [];
+      final cuentasRaw = dash['cuentas_por_cobrar'] ?? dash['cuentasPorCobrar'];
+      if (cuentasRaw is List) {
+        cuentas = cuentasRaw
+            .whereType<Map>()
+            .map((m) => Map<String, dynamic>.from(m))
+            .toList();
+      } else if (cuentasRaw is Map) {
+        cuentas = cuentasRaw.values
+            .whereType<Map>()
+            .map((m) => Map<String, dynamic>.from(m))
+            .toList();
+      }
+
       if (!mounted) return;
       setState(() {
         _clientes = (
@@ -164,6 +182,7 @@ class _InicioScreenState extends State<InicioScreen> {
           egreso: _d(dash['egreso_mes'])
         );
         _ingresosPorMes = byMonth;
+        _cuentasPorCobrar = cuentas;
         _loading = false;
       });
     } catch (e) {
@@ -231,123 +250,232 @@ class _InicioScreenState extends State<InicioScreen> {
               ? Center(child: Text('Error: $_error'))
               : RefreshIndicator(
                   onRefresh: _load,
-                  child: ListView(
-                    padding: const EdgeInsets.all(12),
-                    children: [
-                      _filtros(context),
-                      const SizedBox(height: 8),
-                      _statsGrid(context),
-                      const SizedBox(height: 12),
-                      _graficoCard(context),
-                    ],
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isWide = constraints.maxWidth >= 1080;
+                      return ListView(
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          _topSection(context, constraints.maxWidth),
+                          const SizedBox(height: 18),
+                          if (isWide)
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: 5,
+                                  child: _cuentasPorCobrarCard(context),
+                                ),
+                                const SizedBox(width: 18),
+                                Expanded(
+                                  flex: 7,
+                                  child: _graficoCard(context),
+                                ),
+                              ],
+                            )
+                          else ...[
+                            _cuentasPorCobrarCard(context),
+                            const SizedBox(height: 18),
+                            _graficoCard(context),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 )),
     );
   }
 
   // ───────────────────── Widgets de UI ─────────────────────
-  Widget _filtros(BuildContext context) {
-    return Row(
+  Widget _topSection(BuildContext context, double maxWidth) {
+    final filters = _filtersCard(context);
+    final summary = _summaryMetrics(context);
+    final isWide = maxWidth >= 1024;
+
+    if (isWide) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: summary),
+          const SizedBox(width: 18),
+          SizedBox(width: 240, child: filters),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: InputDecorator(
-            decoration: const InputDecoration(
-              labelText: 'Mes',
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                value: _month,
-                isExpanded: true,
-                items: _monthItems(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _month = v);
-                  _load();
-                },
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 120,
-          child: InputDecorator(
-            decoration: const InputDecoration(
-              labelText: 'Año',
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                value: _year,
-                isExpanded: true,
-                items: _yearItems(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _year = v);
-                  _load();
-                },
-              ),
-            ),
-          ),
-        ),
+        filters,
+        const SizedBox(height: 18),
+        summary,
       ],
     );
   }
 
-  Widget _statBox(String top, String bottom) {
+  Widget _filtersCard(BuildContext context) {
     final theme = Theme.of(context);
+    InputDecoration dec(String label) => InputDecoration(
+          labelText: label,
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        );
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.dividerColor.withOpacity(.4)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
+            color: Colors.black.withOpacity(.05),
+            blurRadius: 16,
+            offset: const Offset(0, 12),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(top, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(bottom, style: TextStyle(color: theme.colorScheme.primary)),
+          const Text(
+            'Filtros',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonHideUnderline(
+            child: DropdownButtonFormField<int>(
+              value: _month,
+              items: _monthItems(),
+              decoration: dec('Mes'),
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _month = v);
+                _load();
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonHideUnderline(
+            child: DropdownButtonFormField<int>(
+              value: _year,
+              items: _yearItems(),
+              decoration: dec('Año'),
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _year = v);
+                _load();
+              },
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _statsGrid(BuildContext context) {
+  Widget _summaryMetrics(BuildContext context) {
     final cl = _clientes ?? (activos: 0, total: 0);
     final pr = _prestamos ?? (activos: 0, total: 0);
-
-    // Ingreso = Capital + Interés del mes seleccionado
     final ingresoTotalMes = _capitalMesActual + _interesMesActual;
 
-    return GridView(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-        childAspectRatio: 2.6,
+    final cards = [
+      _MetricCard(
+        title: 'Clientes Activos',
+        value: '${cl.activos} de ${cl.total}',
       ),
-      children: [
-        _statBox('${cl.activos} de ${cl.total}', 'Clientes Activos'),
-        _statBox('${pr.activos} de ${pr.total}', 'Préstamos Activos'),
-        _statBox(_money(_totalPrestado), 'Total Prestado'),
-        _statBox(_money(_proyInteresMes), 'Proyección Interés'),
-        _statBox(_money(ingresoTotalMes), 'Ingreso'),
-        _statBox(_money(_ingEg.egreso), 'Egresos'),
-      ],
+      _MetricCard(
+        title: 'Préstamos Activos',
+        value: '${pr.activos} de ${pr.total}',
+      ),
+      _MetricCard(
+        title: 'Total Prestado',
+        value: _money(_totalPrestado),
+        highlight: true,
+      ),
+      _MetricCard(
+        title: 'Proyección Interés',
+        value: _money(_proyInteresMes),
+      ),
+      _MetricCard(
+        title: 'Ingreso',
+        value: _money(ingresoTotalMes),
+      ),
+      _MetricCard(
+        title: 'Egresos',
+        value: _money(_ingEg.egreso),
+      ),
+    ];
+
+    return Wrap(
+      spacing: 16,
+      runSpacing: 16,
+      children: cards,
+    );
+  }
+
+  Widget _cuentasPorCobrarCard(BuildContext context) {
+    final theme = Theme.of(context);
+    final cuentas = _cuentasPorCobrar;
+
+    ColorScheme colorScheme = theme.colorScheme;
+
+    Widget emptyState = Container(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      alignment: Alignment.center,
+      child: const Text('No hay cuentas por cobrar pendientes.'),
+    );
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Cuentas por cobrar',
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const PagosScreen(),
+                      ),
+                    );
+                  },
+                  child: const Text('Ver todos'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (cuentas.isEmpty)
+              emptyState
+            else
+              Column(
+                children: [
+                  for (var i = 0; i < cuentas.length; i++)
+                    Padding(
+                      padding: EdgeInsets.only(bottom: i == cuentas.length - 1 ? 0 : 12),
+                      child: _CuentaItem(
+                        data: cuentas[i],
+                        money: _money,
+                        colorScheme: colorScheme,
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -590,6 +718,210 @@ class _InicioScreenState extends State<InicioScreen> {
 }
 
 // ───────────────────── Soporte visual ─────────────────────
+
+class _MetricCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final bool highlight;
+
+  const _MetricCard({
+    required this.title,
+    required this.value,
+    this.highlight = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bg = theme.colorScheme.surface;
+    final primary = theme.colorScheme.primary;
+
+    return Container(
+      constraints: const BoxConstraints(minWidth: 220, maxWidth: 260),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: theme.dividerColor.withOpacity(.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(.04),
+            blurRadius: 18,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: highlight ? primary : theme.colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF7A7F87),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CuentaItem extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final String Function(num) money;
+  final ColorScheme colorScheme;
+
+  const _CuentaItem({
+    required this.data,
+    required this.money,
+    required this.colorScheme,
+  });
+
+  double _asDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  int? _asInt(dynamic v) {
+    if (v is int) return v;
+    return int.tryParse(v?.toString() ?? '');
+  }
+
+  String _pick(List<String> keys) {
+    for (final k in keys) {
+      final value = data[k];
+      if (value == null) continue;
+      final str = value.toString().trim();
+      if (str.isNotEmpty) return str;
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final nombre = _pick(['cliente', 'nombre', 'full_name', 'fullName']);
+    final telefono = _pick(['telefono', 'phone', 'telefono_cliente']);
+    final cuota = _pick(['cuota', 'cuota_actual', 'numero_cuota', 'cuotaPendiente']);
+    final venc = _pick([
+      'vencimiento',
+      'fecha_vencimiento',
+      'proximo_pago',
+      'fechaProximoPago'
+    ]);
+    final status = _pick(['estado', 'status']);
+    final balance = _asDouble(
+      data['balance_pendiente'] ?? data['balancePendiente'] ?? data['saldo_capital'],
+    );
+    final cuotaLabel = cuota.isNotEmpty ? 'Cuota $cuota' : '';
+    final diasAtraso = _asInt(data['dias_atraso'] ?? data['diasAtraso'] ?? data['atraso_dias']);
+
+    Color accent;
+    Color background;
+    if (diasAtraso != null && diasAtraso > 15) {
+      accent = const Color(0xFFE53935);
+      background = const Color(0xFFFFEBEE);
+    } else if (diasAtraso != null && diasAtraso > 0) {
+      accent = const Color(0xFFFFA000);
+      background = const Color(0xFFFFF3E0);
+    } else {
+      accent = colorScheme.primary;
+      background = colorScheme.primary.withOpacity(.08);
+    }
+
+    final statusText = status.isNotEmpty
+        ? status
+        : (diasAtraso != null && diasAtraso > 0
+            ? '$diasAtraso días atraso'
+            : 'Pendiente');
+
+    return Container(
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withOpacity(.3)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  nombre.isEmpty ? 'Cliente sin nombre' : nombre,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (cuotaLabel.isNotEmpty)
+                Text(
+                  cuotaLabel,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: accent,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Balance pendiente: ${money(balance)}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: accent.withOpacity(.16),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  statusText,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: accent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (venc.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Vencimiento: $venc',
+              style: const TextStyle(color: Color(0xFF6C7480)),
+            ),
+          ],
+          if (telefono.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Tel: $telefono',
+              style: const TextStyle(color: Color(0xFF6C7480)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class _Legend extends StatelessWidget {
   final Color color;

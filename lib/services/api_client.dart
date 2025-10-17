@@ -1,6 +1,7 @@
 // lib/services/api_client.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 /// Excepción HTTP propia compatible con Web (sin dart:io).
@@ -27,7 +28,8 @@ class ApiClient {
   late final Uri _baseUri;
   String? _token;
 
-  static String _normalizeBase(String v) => v.trim().replaceAll(RegExp(r'/+$'), '');
+  static String _normalizeBase(String v) =>
+      v.trim().replaceAll(RegExp(r'/+$'), '');
 
   void setToken(String? token) => _token = token;
 
@@ -44,18 +46,21 @@ class ApiClient {
   Map<String, String> _headersJson() => {
         'Content-Type': 'application/json; charset=utf-8',
         'Accept': 'application/json',
-        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+        if (_token != null && _token!.isNotEmpty)
+          'Authorization': 'Bearer $_token',
       };
 
   Map<String, String> _headersForm() => {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'application/json',
-        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+        if (_token != null && _token!.isNotEmpty)
+          'Authorization': 'Bearer $_token',
       };
 
   Map<String, String> _headersMultipart() => {
         'Accept': 'application/json',
-        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+        if (_token != null && _token!.isNotEmpty)
+          'Authorization': 'Bearer $_token',
       };
 
   dynamic _decode(String body) {
@@ -71,7 +76,10 @@ class ApiClient {
     if (r.statusCode >= 200 && r.statusCode < 300) {
       return _decode(r.body);
     }
-    throw ApiHttpException(r.statusCode, r.body.isEmpty ? (r.reasonPhrase ?? '') : r.body);
+    throw ApiHttpException(
+      r.statusCode,
+      r.body.isEmpty ? (r.reasonPhrase ?? '') : r.body,
+    );
   }
 
   Future<T> _wrap<T>(Future<http.Response> f) async {
@@ -101,14 +109,20 @@ class ApiClient {
 
   // ========= Root / ping =========
   Future<Map<String, dynamic>?> ping() async {
-    final res = await _wrap<dynamic>(_client.get(_resolve('/'), headers: _headersJson()));
+    final res = await _wrap<dynamic>(
+      _client.get(_resolve('/'), headers: _headersJson()),
+    );
     return res is Map ? Map<String, dynamic>.from(res) : null;
   }
 
   // ========= Auth =========
   Future<Map<String, dynamic>> register(Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.post(_resolve('/auth/register'), headers: _headersJson(), body: json.encode(body)),
+      _client.post(
+        _resolve('/auth/register'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }
@@ -130,55 +144,83 @@ class ApiClient {
   // ========= Clientes =========
   Future<List<dynamic>> listClientes({String? search}) async {
     final res = await _wrap<dynamic>(_client.get(
-      _resolve('/clientes', {if (search != null && search.trim().isNotEmpty) 'search': search.trim()}),
+      _resolve('/clientes',
+          {if (search != null && search.trim().isNotEmpty) 'search': search}),
       headers: _headersJson(),
     ));
     return List<dynamic>.from(res as List);
   }
 
-  Future<Map<String, dynamic>> createCliente(
-    Map<String, dynamic> body, {
-    List<http.MultipartFile>? files,
-  }) async {
-    if (files != null && files.isNotEmpty) {
-      final request = http.MultipartRequest('POST', _resolve('/clientes'))
-        ..headers.addAll(_headersMultipart())
-        ..fields.addAll({
-          for (final entry in body.entries)
-            if (entry.value != null) entry.key: '${entry.value}',
-        })
-        ..files.addAll(files);
-
-      final res = await _wrapStream<dynamic>(_client.send(request));
-      return Map<String, dynamic>.from(res as Map);
-    }
-
+  /// Crear cliente: SOLO JSON (la foto va por endpoint aparte).
+  Future<Map<String, dynamic>> createCliente(Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.post(_resolve('/clientes'), headers: _headersJson(), body: json.encode(body)),
+      _client.post(
+        _resolve('/clientes'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }
 
-  Future<Map<String, dynamic>> updateCliente(int id, Map<String, dynamic> body) async {
+  /// Actualizar cliente: SOLO JSON (la foto va por endpoint aparte).
+  Future<Map<String, dynamic>> updateCliente(
+      int id, Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.put(_resolve('/clientes/$id'), headers: _headersJson(), body: json.encode(body)),
+      _client.put(
+        _resolve('/clientes/$id'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Subir/actualizar foto del cliente (usa /clientes/{id}/foto).
+  Future<Map<String, dynamic>> uploadClienteFoto(
+    int id,
+    Uint8List bytes,
+    String filename,
+  ) async {
+    final req = http.MultipartRequest(
+      'POST',
+      _resolve('/clientes/$id/foto'),
+    )
+      ..headers.addAll(_headersMultipart())
+      ..files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: filename),
+      );
+
+    final res = await _wrapStream<dynamic>(_client.send(req));
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Eliminar la foto del cliente (usa /clientes/{id}/foto).
+  Future<void> deleteClienteFoto(int id) async {
+    await _wrap<dynamic>(
+      _client.delete(_resolve('/clientes/$id/foto'), headers: _headersJson()),
+    );
   }
 
   Future<void> deleteCliente(int id) async {
-    await _wrap<dynamic>(_client.delete(_resolve('/clientes/$id'), headers: _headersJson()));
+    await _wrap<dynamic>(
+      _client.delete(_resolve('/clientes/$id'), headers: _headersJson()),
+    );
   }
 
   // ========= Préstamos =========
   Future<List<dynamic>> listPrestamos() async {
-    final res = await _wrap<dynamic>(_client.get(_resolve('/prestamos'), headers: _headersJson()));
+    final res = await _wrap<dynamic>(
+      _client.get(_resolve('/prestamos'), headers: _headersJson()),
+    );
     return List<dynamic>.from(res as List);
   }
 
   Future<Map<String, dynamic>?> getPrestamo(int id) async {
     try {
-      final res = await _wrap<dynamic>(_client.get(_resolve('/prestamos/$id'), headers: _headersJson()));
+      final res = await _wrap<dynamic>(
+        _client.get(_resolve('/prestamos/$id'), headers: _headersJson()),
+      );
       if (res == null) return null;
       return Map<String, dynamic>.from(res as Map);
     } on ApiHttpException catch (e) {
@@ -187,29 +229,44 @@ class ApiClient {
     }
   }
 
-  Future<Map<String, dynamic>> createPrestamo(Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> createPrestamo(
+      Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.post(_resolve('/prestamos'), headers: _headersJson(), body: json.encode(body)),
+      _client.post(
+        _resolve('/prestamos'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }
 
-  Future<Map<String, dynamic>> updatePrestamo(int id, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> updatePrestamo(
+      int id, Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.put(_resolve('/prestamos/$id'), headers: _headersJson(), body: json.encode(body)),
+      _client.put(
+        _resolve('/prestamos/$id'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }
 
   Future<void> deletePrestamo(int id) async {
-    await _wrap<dynamic>(_client.delete(_resolve('/prestamos/$id'), headers: _headersJson()));
+    await _wrap<dynamic>(
+      _client.delete(_resolve('/prestamos/$id'), headers: _headersJson()),
+    );
   }
 
   // ========= Pagos =========
   Future<List<dynamic>> listPagosDePrestamo(int prestamoId) async {
     try {
       final res = await _wrap<dynamic>(
-        _client.get(_resolve('/prestamos/$prestamoId/pagos'), headers: _headersJson()),
+        _client.get(
+          _resolve('/prestamos/$prestamoId/pagos'),
+          headers: _headersJson(),
+        ),
       );
       return List<dynamic>.from(res as List);
     } on ApiHttpException catch (e) {
@@ -220,26 +277,38 @@ class ApiClient {
 
   Future<Map<String, dynamic>> createPago(Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.post(_resolve('/pagos'), headers: _headersJson(), body: json.encode(body)),
+      _client.post(
+        _resolve('/pagos'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }
 
   Future<void> deletePago(int id) async {
-    await _wrap<dynamic>(_client.delete(_resolve('/pagos/$id'), headers: _headersJson()));
+    await _wrap<dynamic>(
+      _client.delete(_resolve('/pagos/$id'), headers: _headersJson()),
+    );
   }
 
-  /// ⚠️ Estos dos sólo sirven si implementas esos endpoints en el backend.
+  /// Estos dos requieren que existan esos endpoints en el backend.
   Future<List<dynamic>> listPagosResumen({bool detalle = false}) async {
     final res = await _wrap<dynamic>(
-      _client.get(_resolve('/pagos/resumen', {if (detalle) 'detalle': '1'}), headers: _headersJson()),
+      _client.get(
+        _resolve('/pagos/resumen', {if (detalle) 'detalle': '1'}),
+        headers: _headersJson(),
+      ),
     );
     return List<dynamic>.from(res as List);
   }
 
   Future<List<dynamic>> listPrestamosDeCliente(int clienteId) async {
     final res = await _wrap<dynamic>(
-      _client.get(_resolve('/clientes/$clienteId/prestamos'), headers: _headersJson()),
+      _client.get(
+        _resolve('/clientes/$clienteId/prestamos'),
+        headers: _headersJson(),
+      ),
     );
     return List<dynamic>.from(res as List);
   }
@@ -252,17 +321,26 @@ class ApiClient {
     return List<dynamic>.from(res as List);
   }
 
-  Future<Map<String, dynamic>> createSolicitud(Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> createSolicitud(
+      Map<String, dynamic> body) async {
     final res = await _wrap<dynamic>(
-      _client.post(_resolve('/solicitudes'), headers: _headersJson(), body: json.encode(body)),
+      _client.post(
+        _resolve('/solicitudes'),
+        headers: _headersJson(),
+        body: json.encode(body),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }
 
   // ========= Dashboard =========
-  Future<Map<String, dynamic>> dashboard({required int year, required int month}) async {
+  Future<Map<String, dynamic>> dashboard(
+      {required int year, required int month}) async {
     final res = await _wrap<dynamic>(
-      _client.get(_resolve('/dashboard', {'year': year, 'month': month}), headers: _headersJson()),
+      _client.get(
+        _resolve('/dashboard', {'year': year, 'month': month}),
+        headers: _headersJson(),
+      ),
     );
     return Map<String, dynamic>.from(res as Map);
   }

@@ -1,8 +1,12 @@
 // lib/screens/editar_cliente_screen.dart
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../data/repository.dart';
 import '../models/cliente.dart';
+import '../widgets/cliente_avatar.dart';
 
 class EditarClienteScreen extends StatefulWidget {
   final Cliente cliente;
@@ -33,6 +37,11 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
   late final TextEditingController _puestoCtrl;
   late final TextEditingController _mesesTrabCtrl;
   late EstadoCivil _estadoCivil;
+
+  Uint8List? _fotoBytes;
+  String? _fotoNombre;
+  bool _eliminarFoto = false;
+  bool _eliminarFotoPrevio = false;
 
   @override
   void initState() {
@@ -115,6 +124,64 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
         child: Text(text, style: Theme.of(context).textTheme.titleMedium),
       );
 
+  ImageProvider<Object>? _fotoPreviewImage() {
+    if (_fotoBytes != null) {
+      return MemoryImage(_fotoBytes!);
+    }
+    if (_eliminarFoto) return null;
+    final path = widget.cliente.fotoPath;
+    if (path == null || path.trim().isEmpty) return null;
+    return clienteImageProvider(widget.cliente);
+  }
+
+  bool get _tieneFotoOriginal {
+    final path = widget.cliente.fotoPath;
+    return path != null && path.trim().isNotEmpty;
+  }
+
+  bool get _tieneFotoVisible => _fotoBytes != null || (!_eliminarFoto && _tieneFotoOriginal);
+
+  bool get _mostrarBotonFoto => _fotoBytes != null || _tieneFotoOriginal;
+
+  Future<void> _seleccionarFoto() async {
+    final picker = ImagePicker();
+    try {
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _eliminarFotoPrevio = _eliminarFoto;
+        _fotoBytes = bytes;
+        _fotoNombre = picked.name;
+        _eliminarFoto = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo cargar la foto: $e')),
+      );
+    }
+  }
+
+  void _quitarFoto() {
+    setState(() {
+      if (_fotoBytes != null) {
+        _fotoBytes = null;
+        _fotoNombre = null;
+        _eliminarFoto = _eliminarFotoPrevio;
+      } else if (_tieneFotoOriginal) {
+        _eliminarFoto = !_eliminarFoto;
+      } else {
+        _eliminarFoto = false;
+      }
+    });
+  }
+
   // ----------------- Guardar (usa BACKEND) -----------------
   Future<void> _guardar() async {
     if (_saving) return;
@@ -123,6 +190,9 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
     setState(() => _saving = true);
 
     try {
+      final removeFoto = _eliminarFoto && _fotoBytes == null;
+      final fotoPath = removeFoto ? null : widget.cliente.fotoPath;
+
       final updated = Cliente(
         id: widget.cliente.id,
         // Personales
@@ -133,7 +203,7 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
         direccion: _direccionCtrl.text.trim(),
         telefono: _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
         creadoEn: widget.cliente.creadoEn,
-        fotoPath: widget.cliente.fotoPath,
+        fotoPath: fotoPath,
         // Laborales
         empresa: _empresaCtrl.text.trim().isEmpty ? null : _empresaCtrl.text.trim(),
         ingresos: _ingresosCtrl.text.trim().isEmpty
@@ -155,7 +225,11 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
       );
 
       // 👇 GUARDA EN BACKEND (no en SQLite local)
-      final saved = await Repository.i.updateCliente(updated);
+      final saved = await Repository.i.updateCliente(
+        updated,
+        fotoBytes: _fotoBytes,
+        fotoFilename: _fotoNombre,
+      );
 
       if (!mounted) return;
       Navigator.pop(context, saved);
@@ -172,6 +246,7 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
   // ----------------- UI -----------------
   @override
   Widget build(BuildContext context) {
+    final previewImage = _fotoPreviewImage();
     return Scaffold(
       appBar: AppBar(title: const Text('Editar cliente')),
       body: Form(
@@ -179,6 +254,46 @@ class _EditarClienteScreenState extends State<EditarClienteScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            Center(
+              child: Column(
+                children: [
+                  CircleAvatar(
+                    radius: 48,
+                    backgroundImage: previewImage,
+                    child: previewImage == null
+                        ? const Icon(Icons.person, size: 48)
+                        : null,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      FilledButton.icon(
+                        icon: const Icon(Icons.photo_library_outlined),
+                        label: Text(_tieneFotoVisible ? 'Cambiar foto' : 'Agregar foto'),
+                        onPressed: _saving ? null : _seleccionarFoto,
+                      ),
+                      if (_mostrarBotonFoto)
+                        OutlinedButton.icon(
+                          icon: Icon(
+                            (_fotoBytes != null || !_eliminarFoto)
+                                ? Icons.delete_outline
+                                : Icons.undo,
+                          ),
+                          label: Text(
+                            (_fotoBytes != null || !_eliminarFoto)
+                                ? 'Quitar'
+                                : 'Mantener foto',
+                          ),
+                          onPressed: _saving ? null : _quitarFoto,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             _sectionTitle('Datos personales'),
             TextFormField(
               controller: _nombreCtrl,
