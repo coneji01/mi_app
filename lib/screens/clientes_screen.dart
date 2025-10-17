@@ -1,12 +1,12 @@
 import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import '../widgets/app_drawer.dart';
+import '../widgets/cliente_avatar.dart';
 import '../models/cliente.dart';
 import 'nuevo_cliente_screen.dart';
 import 'cliente_detalle_screen.dart';
 import '../data/repository.dart';
-import '../../main.dart' show routeObserver; // <-- importa el observer
+import '../../main.dart' show routeObserver; // observer para didPopNext
 
 class ClientesScreen extends StatefulWidget {
   const ClientesScreen({super.key});
@@ -32,14 +32,12 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
     _cargar();
   }
 
-  // Suscribirse al RouteObserver
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     routeObserver.subscribe(this, ModalRoute.of(context)!);
   }
 
-  // Desuscribir
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
@@ -48,10 +46,8 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
     super.dispose();
   }
 
-  // Llamado cuando otra pantalla se cierra y esta vuelve a ser visible
   @override
   void didPopNext() {
-    // por si volvemos sin resultado (por botón back, etc.)
     _cargar();
   }
 
@@ -108,74 +104,68 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
         cliente.cedula,
         cliente.telefono,
         cliente.direccion,
-      ]
-          .whereType<String>()
-          .map((e) => e.toLowerCase());
+      ].whereType<String>().map((e) => e.toLowerCase());
       return valores.any((valor) => valor.contains(q));
     }).toList();
   }
 
   Widget _buildFiltros(BuildContext context) {
-    final filtros = <Widget>[
-      TextField(
-        controller: _searchController,
-        decoration: InputDecoration(
-          labelText: 'Buscar cliente',
-          hintText: 'Nombre, apellido, cédula o teléfono',
-          prefixIcon: const Icon(Icons.search),
-          suffixIcon: _searchController.text.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: 'Limpiar búsqueda',
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _searchController.clear();
-                    _aplicarFiltros();
-                  },
-                ),
-        ),
-      ),
-      const SizedBox(height: 12),
-      Row(
-        children: [
-          const Text('Mostrar:'),
-          const SizedBox(width: 8),
-          DropdownButton<int>(
-            value: _pageSize,
-            items: _pageSizeOptions
-                .map(
-                  (cantidad) => DropdownMenuItem<int>(
-                    value: cantidad,
-                    child: Text('$cantidad'),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) {
-              if (value == null || value == _pageSize) return;
-              setState(() {
-                _pageSize = value;
-              });
-            },
-          ),
-          const SizedBox(width: 4),
-          const Text('clientes'),
-          const Spacer(),
-          Text(
-            _clientesFiltrados.isEmpty
-                ? 'Sin coincidencias'
-                : 'Mostrando ${math.min(_clientesFiltrados.length, _pageSize)} de ${_clientesFiltrados.length}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
-    ];
-
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: filtros,
+        children: [
+          TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              labelText: 'Buscar cliente',
+              hintText: 'Nombre, apellido, cédula o teléfono',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Limpiar búsqueda',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        _aplicarFiltros();
+                      },
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Text('Mostrar:'),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                value: _pageSize,
+                items: _pageSizeOptions
+                    .map((cantidad) => DropdownMenuItem<int>(
+                          value: cantidad,
+                          child: Text('$cantidad'),
+                        ))
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null || value == _pageSize) return;
+                  setState(() {
+                    _pageSize = value;
+                  });
+                },
+              ),
+              const SizedBox(width: 4),
+              const Text('clientes'),
+              const Spacer(),
+              Text(
+                _clientesFiltrados.isEmpty
+                    ? 'Sin coincidencias'
+                    : 'Mostrando ${math.min(_clientesFiltrados.length, _pageSize)} de ${_clientesFiltrados.length}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -185,7 +175,6 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
       MaterialPageRoute(builder: (_) => const NuevoClienteScreen()),
     );
     if (creado == true) {
-      // si la pantalla hija avisó “true”, recargamos
       await _cargar();
     }
   }
@@ -195,7 +184,6 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
       MaterialPageRoute(builder: (_) => ClienteDetalleScreen(cliente: c)),
     );
     if (changed == true) {
-      // si editar/eliminar devolvió true, recargamos
       await _cargar();
     }
   }
@@ -206,9 +194,7 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
       drawer: const AppDrawer(current: AppSection.clientes),
       appBar: AppBar(
         title: const Text('Clientes'),
-        actions: [
-          IconButton(onPressed: _cargar, icon: const Icon(Icons.refresh)),
-        ],
+        actions: [IconButton(onPressed: _cargar, icon: const Icon(Icons.refresh))],
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
@@ -249,10 +235,11 @@ class _ClientesScreenState extends State<ClientesScreen> with RouteAware {
         final titulo = [_nn(c.nombre), _nn(c.apellido)]
             .where((s) => s.isNotEmpty)
             .join(' ');
-        final subtituloSrc = _nn(c.telefono).isNotEmpty
-            ? _nn(c.telefono)
-            : _nn(c.direccion);
+        final subtituloSrc =
+            _nn(c.telefono).isNotEmpty ? _nn(c.telefono) : _nn(c.direccion);
+
         return ListTile(
+          leading: ClienteAvatar(cliente: c, radius: 24),
           title: Text(titulo.isEmpty ? 'Sin nombre' : titulo),
           subtitle: subtituloSrc.isEmpty ? null : Text(subtituloSrc),
           onTap: () => _irDetalle(c),

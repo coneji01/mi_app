@@ -1,5 +1,4 @@
 // lib/screens/cliente_detalle_screen.dart
-import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/cliente.dart';
@@ -7,6 +6,7 @@ import '../models/prestamo_propuesta.dart';
 
 // Backend
 import '../data/repository.dart';
+import '../widgets/cliente_avatar.dart';
 
 import 'calculadora_screen.dart';
 import 'nuevo_prestamo_screen.dart';
@@ -237,9 +237,7 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final tieneFoto = (_cliente.fotoPath != null &&
-        _cliente.fotoPath!.isNotEmpty &&
-        File(_cliente.fotoPath!).existsSync());
+    final avatarImage = clienteImageProvider(_cliente);
 
     final nombreCompleto =
         '${_cliente.nombre ?? ''} ${_cliente.apellido ?? ''}'.trim();
@@ -363,9 +361,10 @@ class _ClienteDetalleScreenState extends State<ClienteDetalleScreen> {
               children: [
                 CircleAvatar(
                   radius: 36,
-                  backgroundImage:
-                      tieneFoto ? FileImage(File(_cliente.fotoPath!)) : null,
-                  child: !tieneFoto ? const Icon(Icons.person, size: 36) : null,
+                  backgroundImage: avatarImage,
+                  child: avatarImage == null
+                      ? const Icon(Icons.person, size: 36)
+                      : null,
                 ),
                 const SizedBox(width: 12),
                 Expanded(

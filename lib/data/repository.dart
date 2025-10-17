@@ -1,5 +1,9 @@
 // lib/data/repository.dart
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
+
+import 'package:http/http.dart' as http;
 
 import '../services/api_client.dart';
 import '../services/settings.dart';
@@ -85,9 +89,22 @@ class Repository with ChangeNotifier {
     return l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<Map<String, dynamic>> crearCliente(Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> crearCliente(
+    Map<String, dynamic> body, {
+    Uint8List? fotoBytes,
+    String? fotoFilename,
+  }) async {
     _ensureReady();
-    final m = await _api!.createCliente(body);
+    final files = (fotoBytes != null && fotoBytes.isNotEmpty)
+        ? [
+            http.MultipartFile.fromBytes(
+              'foto',
+              fotoBytes,
+              filename: fotoFilename ?? 'cliente_foto.jpg',
+            ),
+          ]
+        : null;
+    final m = await _api!.createCliente(body, files: files);
     return Map<String, dynamic>.from(m);
   }
 

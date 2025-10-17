@@ -53,6 +53,11 @@ class ApiClient {
         if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
       };
 
+  Map<String, String> _headersMultipart() => {
+        'Accept': 'application/json',
+        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+      };
+
   dynamic _decode(String body) {
     if (body.isEmpty) return null;
     try {
@@ -73,6 +78,19 @@ class ApiClient {
     try {
       final r = await f.timeout(const Duration(seconds: 20));
       final decoded = _okOrThrow(r);
+      return decoded as T;
+    } on TimeoutException {
+      throw Exception('Tiempo de espera agotado');
+    } on http.ClientException catch (e) {
+      throw Exception('No se pudo conectar (${e.message}). Revisa URL y CORS.');
+    }
+  }
+
+  Future<T> _wrapStream<T>(Future<http.StreamedResponse> f) async {
+    try {
+      final r = await f.timeout(const Duration(seconds: 20));
+      final response = await http.Response.fromStream(r);
+      final decoded = _okOrThrow(response);
       return decoded as T;
     } on TimeoutException {
       throw Exception('Tiempo de espera agotado');
@@ -118,7 +136,23 @@ class ApiClient {
     return List<dynamic>.from(res as List);
   }
 
-  Future<Map<String, dynamic>> createCliente(Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> createCliente(
+    Map<String, dynamic> body, {
+    List<http.MultipartFile>? files,
+  }) async {
+    if (files != null && files.isNotEmpty) {
+      final request = http.MultipartRequest('POST', _resolve('/clientes'))
+        ..headers.addAll(_headersMultipart())
+        ..fields.addAll({
+          for (final entry in body.entries)
+            if (entry.value != null) entry.key: '${entry.value}',
+        })
+        ..files.addAll(files);
+
+      final res = await _wrapStream<dynamic>(_client.send(request));
+      return Map<String, dynamic>.from(res as Map);
+    }
+
     final res = await _wrap<dynamic>(
       _client.post(_resolve('/clientes'), headers: _headersJson(), body: json.encode(body)),
     );

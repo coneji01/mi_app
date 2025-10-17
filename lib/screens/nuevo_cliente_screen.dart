@@ -1,5 +1,9 @@
 // lib/screens/nuevo_cliente_screen.dart
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+
 import '../services/settings.dart';
 import '../data/repository.dart';
 import 'configuracion_screen.dart';
@@ -13,6 +17,7 @@ class NuevoClienteScreen extends StatefulWidget {
 
 class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
   final _formKey = GlobalKey<FormState>();
+  bool _guardando = false;
 
   final _nombresCtrl = TextEditingController();
   final _apellidosCtrl = TextEditingController();
@@ -31,6 +36,9 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
   final _puestoTrabajoCtrl = TextEditingController();
   final _mesesTrabajandoCtrl = TextEditingController();
   final _telefonoTrabajoCtrl = TextEditingController(); // (solo UI)
+
+  Uint8List? _fotoBytes;
+  String? _fotoNombre;
 
   @override
   void dispose() {
@@ -75,6 +83,40 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
                   padding: const EdgeInsets.all(16),
                   children: [
                     // ===== Datos básicos =====
+                    Center(
+                      child: Column(
+                        children: [
+                          CircleAvatar(
+                            radius: 48,
+                            backgroundImage:
+                                _fotoBytes != null ? MemoryImage(_fotoBytes!) : null,
+                            child: _fotoBytes == null
+                                ? const Icon(Icons.person, size: 48)
+                                : null,
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              FilledButton.icon(
+                                icon: const Icon(Icons.photo_library_outlined),
+                                label: Text(_fotoBytes == null
+                                    ? 'Agregar foto'
+                                    : 'Cambiar foto'),
+                                onPressed: _seleccionarFoto,
+                              ),
+                              if (_fotoBytes != null)
+                                OutlinedButton.icon(
+                                  icon: const Icon(Icons.delete_outline),
+                                  label: const Text('Quitar'),
+                                  onPressed: _quitarFoto,
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     TextFormField(
                       controller: _nombresCtrl,
                       textCapitalization: TextCapitalization.words,
@@ -227,9 +269,13 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
                     const SizedBox(height: 24),
                     FilledButton.icon(
                       icon: const Icon(Icons.save_outlined),
-                      label: const Text('Guardar'),
-                      onPressed: _guardar,
+                      label: Text(_guardando ? 'Guardando...' : 'Guardar'),
+                      onPressed: _guardando ? null : _guardar,
                     ),
+                    if (_guardando) ...[
+                      const SizedBox(height: 12),
+                      const Center(child: CircularProgressIndicator()),
+                    ],
                   ],
                 ),
               );
@@ -238,6 +284,36 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
         );
       },
     );
+  }
+
+  Future<void> _seleccionarFoto() async {
+    final picker = ImagePicker();
+    try {
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _fotoBytes = bytes;
+        _fotoNombre = picked.name;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo cargar la foto: $e')),
+      );
+    }
+  }
+
+  void _quitarFoto() {
+    setState(() {
+      _fotoBytes = null;
+      _fotoNombre = null;
+    });
   }
 
   Future<void> _guardar() async {
@@ -257,6 +333,8 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
     }
 
     // ====== Guardar en BACKEND (único modo) ======
+    setState(() => _guardando = true);
+
     try {
       final body = <String, dynamic>{
         'nombre': _nombresCtrl.text.trim(),
@@ -284,7 +362,11 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
         // 'telefono_trabajo' no existe en la API; no lo enviamos
       };
 
-      await Repository.i.crearCliente(body); // <-- usa el endpoint /clientes
+      await Repository.i.crearCliente(
+        body,
+        fotoBytes: _fotoBytes,
+        fotoFilename: _fotoNombre,
+      ); // <-- usa el endpoint /clientes
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -296,6 +378,8 @@ class _NuevoClienteScreenState extends State<NuevoClienteScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error al guardar (backend): $e')),
       );
+    } finally {
+      if (mounted) setState(() => _guardando = false);
     }
   }
 }
